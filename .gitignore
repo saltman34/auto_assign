@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+build/
+dist/
+wheels/
+*.egg-info/
+
+# Virtual environments
+.venv/
+venv/
+
+# Tools
+.pytest_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+
+# Streamlit (local secrets only; keep .streamlit/config.toml if you add one)
+.streamlit/secrets.toml
+
+# Scratch / personal notes (not shared)
+docs/assignment_algorithm.md
