@@ -11,6 +11,16 @@ def normalize_string(value: str) -> str:
     return value.strip().title()
 
 
+def normalize_tech_id(value: str) -> str:
+    '''
+    Stable technician id for FKs and ``Assignment.technician_id``: trim only, preserve casing.
+    '''
+    s = value.strip()
+    if not s:
+        raise ValueError('tech_id cannot be empty')
+    return s
+
+
 def require_non_empty_string(value: str) -> str:
     '''
     Require the string to be non-empty.

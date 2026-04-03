@@ -26,3 +26,13 @@ class Staffing_Status(Enum):
     CALL_OFF = "call_off"
     OVERTIME = "overtime"
 
+
+class AssignmentStatus(Enum):
+    '''
+    Persisted assignment row lifecycle: scratch ``draft`` vs published ``confirmed``.
+
+    Scoring history must use **confirmed** rows only (see ``docs/assignment_algorithm.md``).
+    '''
+    DRAFT = 'draft'
+    CONFIRMED = 'confirmed'
+

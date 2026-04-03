@@ -2,7 +2,14 @@ import pandas as pd
 
 
 # Column names expected after standardize_schedule_column_names() (see parse_schedule).
-REQUIRED_COLUMNS = ['tech_name', 'date', 'available_AM', 'available_MID', 'available_PM']
+REQUIRED_COLUMNS = [
+    'tech_name',
+    'date',
+    'available_AM',
+    'available_MID',
+    'available_PM',
+    'staffing_status',
+]
 
 
 def standardize_schedule_column_names(df: pd.DataFrame) -> pd.DataFrame:
@@ -20,6 +27,7 @@ def standardize_schedule_column_names(df: pd.DataFrame) -> pd.DataFrame:
         'availableAM': 'available_AM',
         'availableMID': 'available_MID',
         'availablePM': 'available_PM',
+        'staff_status': 'staffing_status',
     }
     renames = {
         old: new

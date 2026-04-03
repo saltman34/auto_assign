@@ -8,7 +8,7 @@ from .validators.primitives import (
     require_non_empty_enum,
 )
 from .entities import Assignment
-from .enums import TimeSlot, DailyPreference, Staffing_Status
+from .enums import AssignmentStatus, TimeSlot, DailyPreference, Staffing_Status
 
 __all__ = [
     'Tech',
@@ -24,4 +24,5 @@ __all__ = [
     'TimeSlot',
     'DailyPreference',
     'Staffing_Status',
+    'AssignmentStatus',
 ]

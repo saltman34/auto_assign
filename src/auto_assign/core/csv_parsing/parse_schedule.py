@@ -30,7 +30,7 @@ def parse_schedule(df: pd.DataFrame) -> list[ScheduleRow]:
     Validate and parse a schedule DataFrame into ``ScheduleRow`` instances.
 
     Required columns: ``tech_name``, ``date``, ``available_AM``, ``available_MID``,
-    ``available_PM``. The ``date`` column becomes ``work_date`` on each row.
+    ``available_PM``, ``staffing_status``. The ``date`` column becomes ``work_date`` on each row.
     ``standardize_schedule_column_names`` may rewrite legacy availability headers
     before validation (see that function); the **standard** file format uses the
     snake_case names above.
@@ -41,12 +41,14 @@ def parse_schedule(df: pd.DataFrame) -> list[ScheduleRow]:
     _ensure_not_empty(df, 'date')
     for col in _AVAILABILITY_COLUMNS:
         _ensure_not_empty(df, col)
+    _ensure_not_empty(df, 'staffing_status')
 
     df = df.copy()
     df['tech_name'] = df['tech_name'].apply(_normalize_tech_name)
     df['date'] = df['date'].apply(_normalize_date)
     for col in _AVAILABILITY_COLUMNS:
         df[col] = df[col].apply(_normalize_available)
+    df['staffing_status'] = df['staffing_status'].apply(lambda x: str(x).strip())
 
     rows: list[ScheduleRow] = []
     for rec in df.to_dict(orient='records'):
@@ -57,6 +59,7 @@ def parse_schedule(df: pd.DataFrame) -> list[ScheduleRow]:
                 available_AM=rec['available_AM'],
                 available_MID=rec['available_MID'],
                 available_PM=rec['available_PM'],
+                staffing_status=rec['staffing_status'],
             )
         )
     return rows

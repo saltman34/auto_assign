@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List
 
-from auto_assign.domain.enums import TimeSlot
+from auto_assign.domain.enums import Staffing_Status, TimeSlot
 from auto_assign.ingestion import ScheduleRow
 
 
@@ -15,6 +15,8 @@ def row_is_available_for_time_slot(row: ScheduleRow, time_slot: TimeSlot) -> boo
     ``row.available_AM``, ``MID`` → ``available_MID``, ``PM`` → ``available_PM``.
     ``False`` means not assignable for that shift on ``row.work_date``.
     '''
+    if row.staffing_status == Staffing_Status.CALL_OFF:
+        return False
     if time_slot == TimeSlot.AM:
         return row.available_AM is True
     if time_slot == TimeSlot.MID:
