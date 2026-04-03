@@ -32,6 +32,11 @@ from auto_assign.ui.db_state import database_url_configured, tech_id_to_display_
 
 
 def render_schedule_section() -> None:
+    st.title('Allocation / Assignment')
+    st.caption(
+        'Upload a schedule and generate assignments. '
+        'Only rows available for the selected shift and not marked `call_off` are assignable.'
+    )
     uploaded_file = st.file_uploader('Upload a schedule CSV file', type=['csv'])
 
     if uploaded_file is None:

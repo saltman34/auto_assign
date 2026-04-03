@@ -1,4 +1,4 @@
-'''Global Streamlit page chrome (title, intro).'''
+'''Global Streamlit page chrome and home page copy.'''
 
 from __future__ import annotations
 
@@ -9,14 +9,20 @@ def configure_page() -> None:
     st.set_page_config(page_title='Auto Assign', page_icon=':robot:', layout='wide')
 
 
-def render_header() -> None:
+def render_home_page() -> None:
     st.title('Auto Assign')
-    st.write(
-        'This is a simple app to assign technicians to work based on their availability and the work date.'
+    st.markdown(
+        'Auto Assign helps you keep technician profiles in the database and generate shift-level '
+        'task allocations from schedule availability using compatibility scoring + greedy assignment.'
     )
-    st.write(
-        'Upload a schedule CSV with **tech_name**, **date** (YYYY-MM-DD), and '
-        '**available_AM**, **available_MID**, **available_PM** (one boolean per shift). '
-        'Cells can use 1/0, yes/no, or true/false. '
-        'Legacy exports without underscores in those three header names are normalized on upload.'
+    st.markdown('### App pages')
+    st.markdown(
+        '- **Home**: overview and quick start\n'
+        '- **Technician Profiles**: import/edit technicians and manage the technician database\n'
+        '- **Allocation / Assignment**: upload a schedule and generate assignments'
+    )
+    st.markdown('### Schedule CSV requirements')
+    st.markdown(
+        'Required columns: `tech_name`, `date` (YYYY-MM-DD), `available_AM`, `available_MID`, '
+        '`available_PM`, `staffing_status` (`scheduled`, `call_off`, `overtime`).'
     )

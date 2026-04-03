@@ -1,20 +1,29 @@
 '''Streamlit UI composition (keeps ``app.py`` thin).'''
 
-from auto_assign.ui.page import configure_page, render_header
+import streamlit as st
+
+from auto_assign.ui.page import configure_page, render_home_page
 from auto_assign.ui.schedule_assignments import render_schedule_section
-from auto_assign.ui.technicians_panel import render_technicians_expander
+from auto_assign.ui.technicians_panel import render_technician_profiles_page
 
 
 def render_app() -> None:
-    render_header()
-    render_technicians_expander()
-    render_schedule_section()
+    page = st.sidebar.radio(
+        'Navigation',
+        options=('Home', 'Technician Profiles', 'Allocation / Assignment'),
+    )
+    if page == 'Home':
+        render_home_page()
+    elif page == 'Technician Profiles':
+        render_technician_profiles_page()
+    else:
+        render_schedule_section()
 
 
 __all__ = [
     'configure_page',
     'render_app',
-    'render_header',
+    'render_home_page',
     'render_schedule_section',
-    'render_technicians_expander',
+    'render_technician_profiles_page',
 ]
