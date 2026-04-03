@@ -1,6 +1,5 @@
 '''Tests for schedule cell normalization (tech name, date, availability).'''
 
-import math
 from datetime import date, datetime
 
 import numpy as np

@@ -1,0 +1,31 @@
+tech_id,tech_name,daily_preference,favorites,dislikes
+t-01,Alice Smith,consistency,Clinicals; Recuts; Scrolls,Embedding; Exhaust Checks
+t-02,Bob Jones,variation,Recuts; Embedding,Exhaust Checks; Grossing
+t-03,Casey Ng,consistency,Scrolls; Embedding; Exhaust Checks,Grossing; Clinicals
+t-04,Dana Ruiz,variation,Embedding; Grossing,Clinicals; Recuts
+t-05,Eric Park,consistency,Exhaust Checks; Grossing; Clinicals,Recuts; Scrolls
+t-06,Frank Wu,variation,Grossing; Recuts,Scrolls; Embedding
+t-07,George Chen,consistency,Clinicals; Recuts; Scrolls,Embedding; Exhaust Checks
+t-08,Hannah Kim,variation,Recuts; Embedding,Exhaust Checks; Grossing
+t-09,Ian Price,consistency,Scrolls; Embedding; Exhaust Checks,Grossing; Clinicals
+t-10,Julia Meyer,variation,Embedding; Grossing,Clinicals; Recuts
+t-11,Kevin Ortiz,consistency,Exhaust Checks; Grossing; Clinicals,Recuts; Scrolls
+t-12,Liam Patel,variation,Grossing; Recuts,Scrolls; Embedding
+t-13,Mia Ross,consistency,Clinicals; Recuts; Scrolls,Embedding; Exhaust Checks
+t-14,Noah Singh,variation,Recuts; Embedding,Exhaust Checks; Grossing
+t-15,Olivia Lee,consistency,Scrolls; Embedding; Exhaust Checks,Grossing; Clinicals
+t-16,Paul Quinn,variation,Embedding; Grossing,Clinicals; Recuts
+t-17,Quinn Reed,consistency,Exhaust Checks; Grossing; Clinicals,Recuts; Scrolls
+t-18,Rita Stone,variation,Grossing; Recuts,Scrolls; Embedding
+t-19,Sam Tracy,consistency,Clinicals; Recuts; Scrolls,Embedding; Exhaust Checks
+t-20,Tara Ulrich,variation,Recuts; Embedding,Exhaust Checks; Grossing
+t-21,Uma Vance,consistency,Scrolls; Embedding; Exhaust Checks,Grossing; Clinicals
+t-22,Victor Webb,variation,Embedding; Grossing,Clinicals; Recuts
+t-23,Wendy Yang,consistency,Exhaust Checks; Grossing; Clinicals,Recuts; Scrolls
+t-24,Xavier Zhao,variation,Grossing; Recuts,Scrolls; Embedding
+t-25,Yara Adams,consistency,Clinicals; Recuts; Scrolls,Embedding; Exhaust Checks
+t-26,Zane Brooks,variation,Recuts; Embedding,Exhaust Checks; Grossing
+t-27,Amy Cruz,consistency,Scrolls; Embedding; Exhaust Checks,Grossing; Clinicals
+t-28,Ben Diaz,variation,Embedding; Grossing,Clinicals; Recuts
+t-29,Cara Ellis,consistency,Exhaust Checks; Grossing; Clinicals,Recuts; Scrolls
+t-30,Dan Fox,variation,Grossing; Recuts,Scrolls; Embedding

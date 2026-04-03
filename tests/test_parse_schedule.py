@@ -18,6 +18,7 @@ def _minimal_valid_df() -> pd.DataFrame:
             'available_AM': [1],
             'available_MID': [0],
             'available_PM': ['yes'],
+            'staffing_status': ['scheduled'],
         }
     )
 
@@ -31,6 +32,7 @@ def test_parse_schedule_minimal_row() -> None:
     assert r.available_AM is True
     assert r.available_MID is False
     assert r.available_PM is True
+    assert r.staffing_status.value == 'scheduled'
 
 
 def test_parse_schedule_legacy_camel_case_availability_headers() -> None:
@@ -41,6 +43,7 @@ def test_parse_schedule_legacy_camel_case_availability_headers() -> None:
             'availableAM': [0],
             'availableMID': [1],
             'availablePM': [0],
+            'staffing_status': ['scheduled'],
         }
     )
     rows = parse_schedule(df)
@@ -57,6 +60,7 @@ def test_parse_schedule_column_names_with_leading_trailing_spaces() -> None:
             'available_AM': [1],
             'available_MID': [1],
             'available_PM': [1],
+            'staffing_status': ['scheduled'],
         }
     )
     rows = parse_schedule(df)
@@ -64,7 +68,11 @@ def test_parse_schedule_column_names_with_leading_trailing_spaces() -> None:
 
 
 def test_parse_schedule_empty_dataframe_returns_empty_list() -> None:
-    df = pd.DataFrame(columns=pd.Index(['tech_name', 'date', 'available_AM', 'available_MID', 'available_PM']))
+    df = pd.DataFrame(
+        columns=pd.Index(
+            ['tech_name', 'date', 'available_AM', 'available_MID', 'available_PM', 'staffing_status']
+        )
+    )
     assert parse_schedule(df) == []
 
 
@@ -104,6 +112,7 @@ def test_parse_schedule_multiple_rows_order_preserved() -> None:
             'available_AM': [1, 1],
             'available_MID': [1, 1],
             'available_PM': [1, 1],
+            'staffing_status': ['scheduled', 'scheduled'],
         }
     )
     rows = parse_schedule(df)
@@ -111,10 +120,17 @@ def test_parse_schedule_multiple_rows_order_preserved() -> None:
 
 
 def test_load_schedule_reads_csv_bytes() -> None:
-    raw = b'tech_name,date,available_AM,available_MID,available_PM\nPat,2026-04-01,1,0,1\n'
+    raw = b'tech_name,date,available_AM,available_MID,available_PM,staffing_status\nPat,2026-04-01,1,0,1,scheduled\n'
     df = load_schedule(BytesIO(raw))
     assert len(df) == 1
     assert df['tech_name'].iloc[0] == 'Pat'
+
+
+def test_parse_schedule_call_off_not_assignable_flag_parsed() -> None:
+    df = _minimal_valid_df()
+    df.loc[0, 'staffing_status'] = 'call_off'
+    rows = parse_schedule(df)
+    assert rows[0].staffing_status.value == 'call_off'
 
 
 def test_load_schedule_invalid_bytes_raises_value_error() -> None:

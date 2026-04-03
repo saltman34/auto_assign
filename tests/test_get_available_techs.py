@@ -49,6 +49,11 @@ def test_row_is_available_for_time_slot_invalid_enum_member_raises() -> None:
         row_is_available_for_time_slot(row, _ForeignTimeSlot.OTHER)
 
 
+def test_row_is_not_available_when_call_off_even_if_shift_flag_true() -> None:
+    row = ScheduleRow('X', date(2026, 1, 1), True, True, True, staffing_status='call_off')
+    assert row_is_available_for_time_slot(row, TimeSlot.AM) is False
+
+
 def test_filter_schedule_rows_requires_true_for_shift_not_just_matching_date(
     sample_rows: list[ScheduleRow],
 ) -> None:

@@ -19,7 +19,7 @@ class TestStandardizeScheduleColumnNames:
 
     def test_renames_legacy_camel_case_headers_when_snake_missing(self) -> None:
         df = pd.DataFrame(
-            columns=['tech_name', 'date', 'availableAM', 'availableMID', 'availablePM']
+            columns=['tech_name', 'date', 'availableAM', 'availableMID', 'availablePM', 'staff_status']
         )
         out = standardize_schedule_column_names(df)
         assert list(out.columns) == [
@@ -28,12 +28,21 @@ class TestStandardizeScheduleColumnNames:
             'available_AM',
             'available_MID',
             'available_PM',
+            'staffing_status',
         ]
 
     def test_does_not_rename_when_snake_already_present(self) -> None:
         '''If ``available_AM`` exists, keep ``availableAM`` as separate column (no collision rename).'''
         df = pd.DataFrame(
-            columns=['tech_name', 'date', 'availableAM', 'available_AM', 'available_MID', 'available_PM']
+            columns=[
+                'tech_name',
+                'date',
+                'availableAM',
+                'available_AM',
+                'available_MID',
+                'available_PM',
+                'staffing_status',
+            ]
         )
         out = standardize_schedule_column_names(df)
         assert 'availableAM' in out.columns
@@ -51,7 +60,9 @@ class TestCheckRequiredColumnsExist:
         _check_required_columns_exist(df)
 
     def test_missing_one_column_lists_it(self) -> None:
-        df = pd.DataFrame(columns=['tech_name', 'date', 'available_AM', 'available_MID'])
+        df = pd.DataFrame(
+            columns=['tech_name', 'date', 'available_AM', 'available_MID', 'staffing_status']
+        )
         with pytest.raises(ValueError, match='missing') as exc:
             _check_required_columns_exist(df)
         assert 'available_PM' in str(exc.value)
