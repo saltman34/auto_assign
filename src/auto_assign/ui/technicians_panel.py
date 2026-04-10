@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
+from io import BytesIO
 from typing import Any
 
 import pandas as pd
 import streamlit as st
-from sqlalchemy import select
 
 from auto_assign.core import load_tech_profile_csv, parse_tech_profiles
 from auto_assign.core.task_management import validate_tech_preference_lists
@@ -15,22 +15,32 @@ from auto_assign.db import (
     build_tech_import_plan,
     delete_all_technicians,
     delete_technician,
+    find_tech_id_for_normalized_tech_name,
     list_technicians,
+    list_tasks,
+    load_tech_by_tech_id,
     merge_technician_from_tech,
     session_scope,
     summarize_plan,
-    tech_from_technician,
 )
-from auto_assign.db.models.technician import Technician
 from auto_assign.db.tech_import_plan import TechImportRowPlan
 from auto_assign.domain.entities import Tech, tech_profile_equals
 from auto_assign.domain.enums import DailyPreference
 from auto_assign.domain.validators.primitives import normalize_string
-from auto_assign.task_config import tasks as task_catalog
 from auto_assign.ui.db_state import database_url_configured
+from auto_assign.ui.page import render_page_header
 
 _SS_PLAN = '_aa_tech_csv_import_plan'
+_SS_CSV_SIG = '_aa_tech_csv_sig'
+_SS_CSV_UPLOADER_NONCE = '_aa_csv_uploader_nonce'
+_SS_IMPORT_FLASH = '_aa_tech_import_flash'
 _SS_FORM_PENDING = '_aa_tech_form_overwrite_pending'
+
+
+def _tech_csv_signature(uploaded: Any) -> str:
+    raw = uploaded.getvalue()
+    fid = getattr(uploaded, 'file_id', None)
+    return f'{fid or uploaded.name}:{len(raw)}'
 
 
 def _tech_to_state(t: Tech) -> dict[str, Any]:
@@ -118,61 +128,127 @@ def _plan_preview_dataframe(plans: list[TechImportRowPlan]) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def _render_database_tab(techs: list[Tech]) -> None:
-    st.markdown('### Technician Database')
+def _render_profiles_tab(techs: list[Tech]) -> None:
+    st.markdown('### Profiles')
+    st.caption('Saved technician records used for scoring and for mapping schedule names to `tech_id`.')
     if not techs:
-        st.info('No technicians in the database yet.')
+        st.markdown(
+            '<div class="aa-empty">No technicians saved yet. Use <strong>Bulk Import</strong> or '
+            '<strong>Add or Edit Profile</strong> to add profiles.</div>',
+            unsafe_allow_html=True,
+        )
     else:
         st.dataframe(_technicians_dataframe(techs), use_container_width=True, hide_index=True)
 
-    st.markdown('---')
-    st.markdown('### Delete tools')
-    st.caption('Delete actions also remove assignment rows tied to the removed tech id(s).')
 
-    show_delete_one = st.checkbox('Enable: delete one technician', key='tech_show_delete_one')
-    if show_delete_one:
-        options = [''] + [t.tech_id for t in techs]
-        pick = st.selectbox('tech_id to remove', options=options, key='tech_delete_pick')
-        if pick and st.button('Delete selected technician', key='tech_delete_one'):
+def _render_delete_tab(techs: list[Tech]) -> None:
+    st.markdown('### Remove technicians')
+    st.caption(
+        'Deleting a technician removes their profile and any assignment rows that reference that '
+        '`tech_id`. This cannot be undone.'
+    )
+
+    st.markdown('#### Delete one technician')
+    options = [''] + [t.tech_id for t in techs]
+    pick = st.selectbox(
+        'Select technician (`tech_id`)',
+        options=options,
+        key='tech_delete_pick',
+        help='Choose a technician to preview their profile before deleting.',
+    )
+    if pick:
+        selected = next(t for t in techs if t.tech_id == pick)
+        st.markdown('**Profile to be removed**')
+        st.dataframe(_technicians_dataframe([selected]), use_container_width=True, hide_index=True)
+        if st.button('Delete this technician', key='tech_delete_one', type='primary'):
             try:
                 with session_scope() as session:
                     n_a, n_t = delete_technician(session, pick)
                 st.success(
                     f'Removed technician `{pick}` '
-                    f'({n_a} assignment row(s) deleted, technician row(s) removed: {n_t}).'
+                    f'({n_a} assignment row(s) deleted; technician row(s) removed: {n_t}).'
                 )
                 st.rerun()
             except Exception as e:
                 st.error(f'Delete failed: {e}')
+    elif techs:
+        st.caption('Select a `tech_id` above to preview the profile and enable deletion.')
+    else:
+        st.info('No technicians to remove.')
 
-    show_delete_all = st.checkbox('Enable: delete all technicians', key='tech_show_delete_all')
-    if show_delete_all:
-        confirm = st.text_input(
-            'Type `DELETE ALL TECHNICIANS` to enable deletion.',
-            key='tech_delete_all_confirm',
+    st.markdown('---')
+    st.markdown('#### Delete all technicians')
+    st.caption('Removes every profile and all assignment rows in the database.')
+    confirm = st.text_input(
+        'Type `DELETE ALL TECHNICIANS` to enable deletion.',
+        key='tech_delete_all_confirm',
+    )
+    if st.button(
+        'Delete every technician (and all assignments)',
+        disabled=confirm != 'DELETE ALL TECHNICIANS' or not techs,
+        key='tech_delete_all_btn',
+    ):
+        try:
+            with session_scope() as session:
+                n_a, n_t = delete_all_technicians(session)
+            st.success(f'Removed {n_t} technician profile(s) and {n_a} assignment row(s).')
+            st.session_state.pop(_SS_PLAN, None)
+            st.session_state.pop(_SS_CSV_SIG, None)
+            st.session_state.pop(_SS_FORM_PENDING, None)
+            st.rerun()
+        except Exception as e:
+            st.error(f'Delete all failed: {e}')
+
+
+def _render_csv_tab(task_names: list[str]) -> None:
+    flash = st.session_state.pop(_SS_IMPORT_FLASH, None)
+    if flash:
+        st.success(flash['message'])
+        for w in flash.get('warnings', ()):
+            st.warning(w)
+
+    st.markdown('### Bulk import')
+    st.caption(
+        'Upload a CSV to preview the import. Adjust options, then confirm. After a successful import, '
+        'the file clears so you can upload another CSV; the preview only reflects the file currently '
+        'selected.'
+    )
+    if not task_names:
+        st.info('Add at least one task in Task Catalog before importing technician preferences.')
+        return
+    uploader_nonce = int(st.session_state.get(_SS_CSV_UPLOADER_NONCE, 0))
+    tech_csv = st.file_uploader(
+        'Technician profile CSV',
+        type=['csv'],
+        key=f'tech_profile_csv_{uploader_nonce}',
+    )
+
+    if tech_csv is None:
+        st.session_state.pop(_SS_PLAN, None)
+        st.session_state.pop(_SS_CSV_SIG, None)
+        st.markdown(
+            '<div class="aa-empty">Choose a CSV file to load a preview of what will be imported.</div>',
+            unsafe_allow_html=True,
         )
-        if st.button(
-            'Delete every technician (and all assignments)',
-            disabled=confirm != 'DELETE ALL TECHNICIANS',
-            key='tech_delete_all_btn',
-        ):
-            try:
-                with session_scope() as session:
-                    n_a, n_t = delete_all_technicians(session)
-                st.success(f'Removed {n_t} technician profile(s) and {n_a} assignment row(s).')
-                st.session_state.pop(_SS_PLAN, None)
-                st.session_state.pop(_SS_FORM_PENDING, None)
-                st.rerun()
-            except Exception as e:
-                st.error(f'Delete all failed: {e}')
+        return
 
-
-def _render_csv_tab() -> None:
-    st.markdown('### Upload Technician CSV')
-    tech_csv = st.file_uploader('Tech profile CSV', type=['csv'], key='tech_profile_csv')
+    sig = _tech_csv_signature(tech_csv)
+    if st.session_state.get(_SS_CSV_SIG) != sig:
+        try:
+            raw = tech_csv.getvalue()
+            df = load_tech_profile_csv(BytesIO(raw))
+            parsed = parse_tech_profiles(df, allowed_task_names=task_names)
+            with session_scope() as session:
+                plans = build_tech_import_plan(session, parsed)
+            st.session_state[_SS_PLAN] = _plan_rows_state(plans)
+            st.session_state[_SS_CSV_SIG] = sig
+        except Exception as e:
+            st.session_state.pop(_SS_PLAN, None)
+            st.error(f'Could not read this CSV: {e}')
+            return
 
     overwrite = st.checkbox(
-        'Overwrite saved profiles when `tech_id` matches but fields differ',
+        'Overwrite existing profiles when `tech_id` matches but fields differ',
         value=False,
         key='tech_csv_overwrite',
     )
@@ -182,72 +258,76 @@ def _render_csv_tab() -> None:
         key='tech_csv_skip_blocked',
     )
 
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        preview_btn = st.button('Preview (optional)', disabled=tech_csv is None, key='tech_csv_preview')
-    with c2:
-        submit_btn = st.button('Submit CSV to database', disabled=tech_csv is None, key='tech_csv_submit')
-    with c3:
-        if st.button('Clear preview', key='tech_csv_clear_preview'):
-            st.session_state.pop(_SS_PLAN, None)
+    if _SS_PLAN not in st.session_state:
+        return
 
-    if preview_btn and tech_csv is not None:
+    plans = _plans_from_state(st.session_state[_SS_PLAN])
+    counts = summarize_plan(plans)
+    st.markdown('#### Import preview')
+    st.caption(
+        f'{len(plans)} row(s) after de-duplicating `tech_id` (last row wins per id). '
+        'Review statuses before confirming.'
+    )
+    c0, c1m, c2m, c3m = st.columns(4)
+    with c0:
+        st.metric('New', counts['new'])
+    with c1m:
+        st.metric('Unchanged', counts['unchanged'])
+    with c2m:
+        st.metric('Updates (pending)', counts['update_pending'])
+    with c3m:
+        st.metric('Name blocked', counts['name_blocked'])
+    st.dataframe(_plan_preview_dataframe(plans), use_container_width=True, hide_index=True)
+
+    blocked_without_skip = counts['name_blocked'] > 0 and not skip_blocked
+    if blocked_without_skip:
+        st.warning(
+            'Some rows are name-blocked. Fix `tech_id` / names in the CSV, or enable '
+            '**Skip rows blocked by name conflict** before confirming.'
+        )
+
+    confirm_disabled = blocked_without_skip
+    if st.button(
+        'Confirm import to database',
+        disabled=confirm_disabled,
+        key='tech_csv_confirm',
+        type='primary',
+    ):
         try:
-            df = load_tech_profile_csv(tech_csv)
-            parsed = parse_tech_profiles(df)
+            raw = tech_csv.getvalue()
+            df = load_tech_profile_csv(BytesIO(raw))
+            parsed = parse_tech_profiles(df, allowed_task_names=task_names)
             with session_scope() as session:
-                plans = build_tech_import_plan(session, parsed)
-            st.session_state[_SS_PLAN] = _plan_rows_state(plans)
-            st.success(f'Preview ready for {len(plans)} row(s) after de-duplicating `tech_id`.')
-        except Exception as e:
-            st.error(f'Preview failed: {e}')
-
-    if _SS_PLAN in st.session_state:
-        plans = _plans_from_state(st.session_state[_SS_PLAN])
-        counts = summarize_plan(plans)
-        c0, c1m, c2m, c3m = st.columns(4)
-        with c0:
-            st.metric('New', counts['new'])
-        with c1m:
-            st.metric('Unchanged', counts['unchanged'])
-        with c2m:
-            st.metric('Updates (pending)', counts['update_pending'])
-        with c3m:
-            st.metric('Name blocked', counts['name_blocked'])
-        st.dataframe(_plan_preview_dataframe(plans), use_container_width=True, hide_index=True)
-
-        if counts['name_blocked'] and not skip_blocked:
-            st.warning(
-                'Some rows are name-blocked. Reuse existing `tech_id` values in CSV, or enable '
-                '`Skip rows blocked by name conflict`.'
-            )
-
-    if submit_btn:
-        try:
-            # Submit always works even without preview.
-            df = load_tech_profile_csv(tech_csv)
-            parsed = parse_tech_profiles(df)
-            with session_scope() as session:
-                plans = build_tech_import_plan(session, parsed)
-                written, skipped_u, warns = apply_tech_import_plan(
+                plans_apply = build_tech_import_plan(session, parsed)
+                _written, _skipped_u, warns = apply_tech_import_plan(
                     session,
-                    plans,
+                    plans_apply,
                     overwrite_updates=overwrite,
                     skip_name_blocked=skip_blocked,
                 )
-            st.success(f'{written} row(s) written, {skipped_u} unchanged skipped.')
-            for w in warns:
-                st.warning(w)
-            st.session_state[_SS_PLAN] = _plan_rows_state(plans)
+            st.session_state[_SS_IMPORT_FLASH] = {
+                'message': (
+                    'Import confirmed — your previewed changes are saved to the database.\n\n'
+                    'Next: open **Profiles** to verify, or **Home** to run the Assignment Engine.'
+                ),
+                'warnings': tuple(warns),
+            }
+            st.session_state.pop(_SS_PLAN, None)
+            st.session_state.pop(_SS_CSV_SIG, None)
+            st.session_state[_SS_CSV_UPLOADER_NONCE] = uploader_nonce + 1
+            st.rerun()
         except ValueError as e:
             st.error(str(e))
         except Exception as e:
-            st.error(f'Submit failed: {e}')
+            st.error(f'Import failed: {e}')
 
 
-def _render_form_tab() -> None:
-    st.markdown('### Add or Update Technician')
-    task_names = [str(t['task_name']) for t in task_catalog]
+def _render_form_tab(task_names: list[str]) -> None:
+    st.markdown('### Add or Update Profile')
+    st.caption('Use this form for one-at-a-time profile updates with overwrite confirmation safeguards.')
+    if not task_names:
+        st.info('Add at least one task in Task Catalog before editing favorites/dislikes.')
+        return
 
     if _SS_FORM_PENDING in st.session_state:
         pending = st.session_state[_SS_FORM_PENDING]
@@ -269,7 +349,11 @@ def _render_form_tab() -> None:
         )
         b1, b2 = st.columns(2)
         with b1:
-            if st.button('Overwrite database with form values', key='tech_form_do_overwrite'):
+            if st.button(
+                'Overwrite database with form values',
+                key='tech_form_do_overwrite',
+                type='primary',
+            ):
                 try:
                     with session_scope() as session:
                         merge_technician_from_tech(session, inc)
@@ -311,7 +395,7 @@ def _render_form_tab() -> None:
             options=task_names,
             help='Select up to 3 disliked tasks. Cannot overlap favorites.',
         )
-        submitted = st.form_submit_button('Save technician')
+        submitted = st.form_submit_button('Save technician', type='primary')
 
     if not submitted:
         return
@@ -321,7 +405,11 @@ def _render_form_tab() -> None:
         return
 
     try:
-        fav_list, dis_list = validate_tech_preference_lists(f_fav, f_dis)
+        fav_list, dis_list = validate_tech_preference_lists(
+            f_fav,
+            f_dis,
+            allowed_task_names=task_names,
+        )
         tech = Tech(
             tech_id=f_tech_id.strip(),
             tech_name=f_name.strip(),
@@ -330,9 +418,8 @@ def _render_form_tab() -> None:
             dislikes=dis_list,
         )
         with session_scope() as session:
-            row = session.get(Technician, tech.tech_id)
-            if row is not None:
-                existing_tech = tech_from_technician(row)
+            existing_tech = load_tech_by_tech_id(session, tech.tech_id)
+            if existing_tech is not None:
                 if tech_profile_equals(existing_tech, tech):
                     st.info(f'Technician `{tech.tech_id}` is already saved with the same values.')
                 else:
@@ -342,11 +429,12 @@ def _render_form_tab() -> None:
                     }
                     st.rerun()
             else:
-                stmt = select(Technician).where(Technician.tech_name == normalize_string(tech.tech_name))
-                other = session.scalars(stmt).first()
-                if other is not None:
+                other_id = find_tech_id_for_normalized_tech_name(
+                    session, normalize_string(tech.tech_name)
+                )
+                if other_id is not None:
                     st.error(
-                        f'The name `{tech.tech_name}` is already used by technician `{other.tech_id}`. '
+                        f'The name `{tech.tech_name}` is already used by technician `{other_id}`. '
                         'Use that `tech_id` to edit the profile, or choose a different display name.'
                     )
                 else:
@@ -357,10 +445,27 @@ def _render_form_tab() -> None:
 
 
 def render_technician_profiles_page() -> None:
-    st.title('Technician Profiles')
-    st.caption(
-        'Manage technician profiles in Postgres. CSV submit is direct (preview is optional). '
-        'Profile columns: `tech_id`, `tech_name`, `daily_preference`, optional `favorites`, `dislikes`.'
+    render_page_header(
+        'Technician Profiles',
+        'Identity, daily preference, favorites, and dislikes — the inputs your scoring engine reads.',
+        kicker='Registry & import',
+    )
+    with st.expander('When to use this page', expanded=False):
+        st.markdown(
+            '- **Before running the Assignment Engine** if technicians are missing or profiles are outdated.\n'
+            '- **When schedule names change** so `tech_name` still matches what appears in schedule CSVs.\n'
+            '- **When preferences change** (favorites, dislikes, daily preference) so scoring reflects current rules.\n'
+            '- Day-level availability and call-offs stay in **schedule uploads on Home** — not here.'
+        )
+    st.markdown(
+        '''
+<div class="aa-card">
+  <div class="aa-kicker">Profile Data Model</div>
+  Profiles are intentionally stable and role-oriented. Day-level availability and staffing status
+  belong to schedule uploads on the Home page.
+</div>
+''',
+        unsafe_allow_html=True,
     )
     if not database_url_configured():
         st.info(
@@ -372,18 +477,20 @@ def render_technician_profiles_page() -> None:
     try:
         with session_scope() as session:
             techs = list_technicians(session)
+            task_catalog = list_tasks(session)
     except Exception as e:
-        st.error(f'Could not load technicians: {e}')
+        st.error(f'Could not load technicians/tasks: {e}')
         techs = []
+        task_catalog = []
 
-    tabs = st.tabs(['Database', 'Upload CSV', 'Form'])
+    task_names = [t.task_name for t in task_catalog]
+
+    tabs = st.tabs(['Profiles', 'Bulk Import', 'Add or Edit Profile', 'Remove technicians'])
     with tabs[0]:
-        _render_database_tab(techs)
+        _render_profiles_tab(techs)
     with tabs[1]:
-        _render_csv_tab()
+        _render_csv_tab(task_names)
     with tabs[2]:
-        _render_form_tab()
-
-
-# Backward compatibility for any older import path.
-render_technicians_expander = render_technician_profiles_page
+        _render_form_tab(task_names)
+    with tabs[3]:
+        _render_delete_tab(techs)
