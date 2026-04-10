@@ -1,0 +1,20 @@
+# Example task list for documentation only.
+#
+# The running app does NOT load this file. Assignable tasks and default headcounts
+# are stored in PostgreSQL (`tasks` table) and edited in the Streamlit Task Catalog.
+#
+# Use this shape as a scratch reference when planning catalog seed data.
+
+tasks:
+  - task_id: "1"
+    task_name: "Task 1"
+  - task_id: "2"
+    task_name: "Task 2"
+  - task_id: "3"
+    task_name: "Task 3"
+  - task_id: "4"
+    task_name: "Task 4"
+  - task_id: "5"
+    task_name: "Task 5"
+  - task_id: "6"
+    task_name: "Task 6"

@@ -68,10 +68,22 @@ Use a **weighted sum** (tune via config/constants):
 
 Tasks **not** in favorites or dislike lists: **no** favorite/dislike bonus or penalty (neutral).
 
-### 2.3 Ties and reproducibility
+### 2.3 Default policy and tie handling
 
-- If multiple techs share the **same** top score for a slot, choose **uniformly at random** among ties.
-- Use a **seeded RNG** (pass seed from config or UI) so runs are reproducible for debugging and tests; different seed → different tie breaks.
+Current default policy (`GreedyOptimizationConfig`) is:
+
+- local swap post-pass: **ON**
+- lookahead tie-breaks: **ON**
+- exact fallback for small pools: **ON** (`pool <= 9`)
+- strict dislike avoidance: **ON**
+
+Tie handling is two-stage:
+
+1. Find top-scoring technicians for the slot.
+2. If lookahead tie-breaks are enabled, prefer candidates that preserve better future option counts.
+3. If still tied, choose uniformly at random among tied candidates.
+
+Use a **seeded RNG** (seed from UI/config) so runs are reproducible for debugging and tests; different seed can produce different outcomes only where ties remain after lookahead.
 
 Optional: shuffle technician order **before** greedy with the same RNG so tie-breaking does not always favor the same ID ordering.
 
@@ -84,9 +96,14 @@ Optional: shuffle technician order **before** greedy with the same RNG so tie-br
 
 ---
 
-## 4. Future upgrades
+## 4. Simulation and benchmarking
 
-- If greedy quality is insufficient, keep the **same scoring function** and swap the optimizer (e.g. **minimum-cost bipartite matching**) without changing business rules.
+Use the simulation script at repo root:
+
+- `python scripts/run_greedy_simulation.py --mode sanity`
+- `python scripts/run_greedy_simulation.py --mode paired`
+
+`paired` runs baseline vs improved policy on the same seeded scenarios and is the preferred way to evaluate policy changes.
 
 ---
 

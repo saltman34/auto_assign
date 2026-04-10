@@ -1,5 +1,7 @@
 # Technician profiles: desired features and system integration
 
+For **CSV column names and validation rules**, see [csv_contract.md](csv_contract.md) §2.
+
 This document describes the **two ways operators add technicians to the database**, how they map into the existing codebase, and how **“each tech only once”** is enforced today versus optional product hardening.
 
 ---
@@ -51,7 +53,7 @@ Streamlit (technicians_panel.py)
 
 ### CSV contract
 
-Documented in [`parse_tech_profiles.py`](../src/auto_assign/core/csv_parsing/parse_tech_profiles.py): required columns `tech_id`, `tech_name`, availability flags, `staff_status`, `daily_preference`; optional `favorites` / `dislikes` (semicolon- or comma-separated task names). **Favorites/dislikes** are validated by [`validate_tech_preference_lists`](../src/auto_assign/core/task_management/validate_tech_preferences.py): names must match [`task_config.py`](../src/auto_assign/task_config.py), no duplicate within a list, no task in both lists, at most three per list. Sample: [`data/sample_tech_profiles.csv`](../data/sample_tech_profiles.csv).
+Documented in [`parse_tech_profiles.py`](../src/auto_assign/core/csv_parsing/parse_tech_profiles.py): required columns `tech_id`, `tech_name`, `daily_preference`; optional `favorites` / `dislikes` (semicolon- or comma-separated task names). **Favorites/dislikes** are validated by [`validate_tech_preference_lists`](../src/auto_assign/core/task_management/validate_tech_preferences.py): names must match task names loaded from the DB-backed catalog (`tasks` table), no duplicate within a list, no task in both lists, at most three per list. Sample: [`data/sample_tech_profiles.csv`](../data/sample_tech_profiles.csv).
 
 ### Duplicate semantics (CSV)
 
