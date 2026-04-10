@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *.pyo
+*.egg
 build/
 dist/
 wheels/
@@ -14,10 +15,29 @@ venv/
 # Tools
 .pytest_cache/
 .ruff_cache/
+.mypy_cache/
+.tox/
 _alembic_tmp.db
+
+# Test / coverage
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Environment and local secrets (template stays tracked: .env.example)
+.env
+.env.local
+.env.*.local
+
+# Streamlit (local secrets only; keep .streamlit/config.toml)
+.streamlit/secrets.toml
+
+# Logs
+*.log
 
 # OS / editor
 .DS_Store
-
-# Streamlit (local secrets only; keep .streamlit/config.toml if you add one)
-.streamlit/secrets.toml
+.idea/
+*.swp
+*~

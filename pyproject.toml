@@ -1,7 +1,7 @@
 [project]
 name = "auto-assign-practice"
 version = "0.1.0"
-description = "Add your description here"
+description = "Streamlit app for greedy shift task assignment with PostgreSQL persistence"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
