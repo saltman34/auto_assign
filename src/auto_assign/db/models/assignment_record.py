@@ -2,9 +2,9 @@
 ORM model for persisted assignments (draft workspace + confirmed history).
 
 Named ``AssignmentRecord`` to avoid clashing with domain ``Assignment``. Map to
-domain with ``task_id`` ↔ ``Task.task_id`` / ``Assignment.task_name`` (until
-assignments store ids end-to-end), ``technician_id``, ``date_assigned`` ← ``work_date``,
-and ``time_slot``.
+domain with ``task_id`` (currently task display name for compatibility with
+``Assignment.task_name``), ``technician_id``, ``date_assigned`` ← ``work_date``, and
+``time_slot``.
 '''
 from __future__ import annotations
 
@@ -31,7 +31,7 @@ class AssignmentRecord(Base):
         ForeignKey('technicians.tech_id', ondelete='RESTRICT'),
         nullable=False,
     )
-    #: Task identifier (FK to ``tasks`` when that table exists; until then often same as normalized name).
+    #: Stored task label used by assignment scoring/history displays.
     task_id: Mapped[str] = mapped_column(String(256), nullable=False)
     #: Calendar date of the shift (domain ``Assignment.date_assigned``).
     work_date: Mapped[date] = mapped_column(Date, nullable=False)

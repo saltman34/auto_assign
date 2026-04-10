@@ -95,3 +95,21 @@ def upsert_technicians(session: Session, techs: Iterable[Tech]) -> int:
         merge_technician_from_tech(session, t)
         n += 1
     return n
+
+
+def load_tech_by_tech_id(session: Session, tech_id: str) -> Tech | None:
+    '''Return the saved profile for ``tech_id``, or ``None`` if missing.'''
+    row = session.get(Technician, tech_id)
+    return tech_from_technician(row) if row is not None else None
+
+
+def find_tech_id_for_normalized_tech_name(session: Session, normalized_name: str) -> str | None:
+    '''
+    Return ``tech_id`` for a row whose stored ``tech_name`` equals ``normalized_name`` (exact match).
+
+    Callers should pass ``normalize_string(...)`` so comparison matches how profiles are stored.
+    '''
+    row = session.scalars(
+        select(Technician).where(Technician.tech_name == normalized_name).limit(1)
+    ).first()
+    return row.tech_id if row is not None else None

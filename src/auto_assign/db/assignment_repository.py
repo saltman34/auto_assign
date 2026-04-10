@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Sequence
 from datetime import date
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -37,6 +38,23 @@ def _records_for_slice(
             )
         )
     return rows
+
+
+def delete_draft_slice(session: Session, work_date: date, time_slot: TimeSlot) -> int:
+    '''
+    Delete all **draft** rows for ``(work_date, time_slot)``. Confirmed rows are unchanged.
+
+    Returns:
+        Number of draft rows removed.
+    '''
+    result = session.execute(
+        delete(AssignmentRecord).where(
+            AssignmentRecord.work_date == work_date,
+            AssignmentRecord.time_slot == time_slot,
+            AssignmentRecord.status == AssignmentStatus.DRAFT,
+        )
+    )
+    return int(result.rowcount or 0)
 
 
 def replace_draft_slice(
@@ -114,6 +132,89 @@ def load_draft_assignments_for_slice(
     )
     records = session.scalars(stmt).all()
     return tuple(assignment_from_record(r) for r in records)
+
+
+def list_distinct_work_dates_with_confirmed(session: Session, *, limit: int = 500) -> list[date]:
+    '''Distinct calendar dates that have at least one **confirmed** assignment row, newest first.'''
+    stmt = (
+        select(AssignmentRecord.work_date)
+        .where(AssignmentRecord.status == AssignmentStatus.CONFIRMED)
+        .distinct()
+        .order_by(AssignmentRecord.work_date.desc())
+        .limit(limit)
+    )
+    return list(session.scalars(stmt).all())
+
+
+def load_confirmed_assignment_rows_for_date(session: Session, work_date: date) -> list[dict[str, Any]]:
+    '''
+    Confirmed rows for ``work_date`` with technician display name, ordered for display.
+
+    Uses an outer join so confirmed assignment rows still appear if a technician profile
+    row is missing (``tech_name`` falls back to ``tech_id``).
+
+    Returns:
+        Dicts with keys: ``work_date``, ``time_slot`` (str value), ``tech_id``, ``tech_name``, ``task``.
+    '''
+    stmt = (
+        select(AssignmentRecord, Technician.tech_name)
+        .outerjoin(Technician, AssignmentRecord.technician_id == Technician.tech_id)
+        .where(
+            AssignmentRecord.work_date == work_date,
+            AssignmentRecord.status == AssignmentStatus.CONFIRMED,
+        )
+        .order_by(
+            AssignmentRecord.time_slot,
+            AssignmentRecord.task_id,
+            AssignmentRecord.technician_id,
+        )
+    )
+    out: list[dict[str, Any]] = []
+    for rec, tech_name in session.execute(stmt).all():
+        out.append(
+            {
+                'work_date': rec.work_date,
+                'time_slot': rec.time_slot.value,
+                'tech_id': rec.technician_id,
+                'tech_name': tech_name or rec.technician_id,
+                'task': rec.task_id,
+            }
+        )
+    return out
+
+
+def load_confirmed_assignment_rows_for_slice(
+    session: Session,
+    work_date: date,
+    time_slot: TimeSlot,
+) -> list[dict[str, Any]]:
+    '''
+    Confirmed rows for one ``(work_date, time_slot)`` with technician display names.
+
+    Same dict shape as ``load_confirmed_assignment_rows_for_date``, filtered to a single shift.
+    '''
+    stmt = (
+        select(AssignmentRecord, Technician.tech_name)
+        .outerjoin(Technician, AssignmentRecord.technician_id == Technician.tech_id)
+        .where(
+            AssignmentRecord.work_date == work_date,
+            AssignmentRecord.time_slot == time_slot,
+            AssignmentRecord.status == AssignmentStatus.CONFIRMED,
+        )
+        .order_by(AssignmentRecord.task_id, AssignmentRecord.technician_id, AssignmentRecord.slot_index)
+    )
+    out: list[dict[str, Any]] = []
+    for rec, tech_name in session.execute(stmt).all():
+        out.append(
+            {
+                'work_date': rec.work_date,
+                'time_slot': rec.time_slot.value,
+                'tech_id': rec.technician_id,
+                'tech_name': tech_name or rec.technician_id,
+                'task': rec.task_id,
+            }
+        )
+    return out
 
 
 def technician_ids_missing_from_db(
