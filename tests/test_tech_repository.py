@@ -5,7 +5,12 @@ from sqlalchemy.orm import Session
 
 from auto_assign.db import Base
 from auto_assign.db.models.technician import Technician
-from auto_assign.db.tech_repository import merge_technician_from_tech, upsert_technicians
+from auto_assign.db.tech_repository import (
+    find_tech_id_for_normalized_tech_name,
+    load_tech_by_tech_id,
+    merge_technician_from_tech,
+    upsert_technicians,
+)
 from auto_assign.domain.entities import Tech
 from auto_assign.domain.enums import DailyPreference
 
@@ -53,3 +58,28 @@ def test_upsert_technicians_count() -> None:
         session.commit()
         assert n == 2
         assert session.get(Technician, 'b') is not None
+
+
+def test_load_tech_by_tech_id() -> None:
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        merge_technician_from_tech(session, _tech('x-1', 'Pat'))
+        session.commit()
+    with Session(engine) as session:
+        assert load_tech_by_tech_id(session, 'missing') is None
+        t = load_tech_by_tech_id(session, 'x-1')
+        assert t is not None
+        assert t.tech_id == 'x-1'
+        assert t.tech_name == 'Pat'
+
+
+def test_find_tech_id_for_normalized_tech_name() -> None:
+    engine = create_engine('sqlite:///:memory:')
+    Base.metadata.create_all(engine)
+    with Session(engine) as session:
+        merge_technician_from_tech(session, _tech('y-1', 'Jordan Lee'))
+        session.commit()
+    with Session(engine) as session:
+        assert find_tech_id_for_normalized_tech_name(session, 'nobody') is None
+        assert find_tech_id_for_normalized_tech_name(session, 'Jordan Lee') == 'y-1'

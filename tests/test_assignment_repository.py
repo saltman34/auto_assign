@@ -12,6 +12,10 @@ from auto_assign.db import (
     Technician,
     confirm_slice,
     count_confirmed_for_slice,
+    delete_draft_slice,
+    list_distinct_work_dates_with_confirmed,
+    load_confirmed_assignment_rows_for_date,
+    load_confirmed_assignment_rows_for_slice,
     load_draft_assignments_for_slice,
     replace_draft_slice,
     technician_ids_missing_from_db,
@@ -144,6 +148,78 @@ def test_load_draft_assignments_for_slice_returns_domain_ordered(engine) -> None
         out = load_draft_assignments_for_slice(session, d, slot)
     assert len(out) == 2
     assert [a.task_name for a in out] == ['First', 'Second']
+
+
+def test_list_distinct_dates_and_load_confirmed_view(engine) -> None:
+    d = date(2026, 11, 1)
+    slot = TimeSlot.AM
+    with Session(engine) as session:
+        session.add(_tech('a', 'Ann'))
+        session.flush()
+        confirm_slice(session, d, slot, [Assignment('Clinicals', 'a', d, slot)])
+        session.commit()
+
+    with Session(engine) as session:
+        dates = list_distinct_work_dates_with_confirmed(session)
+        rows = load_confirmed_assignment_rows_for_date(session, d)
+    assert d in dates
+    assert len(rows) == 1
+    assert rows[0]['tech_name'] == 'Ann'
+    assert rows[0]['tech_id'] == 'a'
+    assert rows[0]['task'] == 'Clinicals'
+    assert rows[0]['time_slot'] == slot.value
+
+
+def test_load_confirmed_assignment_rows_for_slice_filters_date_and_slot(engine) -> None:
+    d = date(2026, 11, 2)
+    am = TimeSlot.AM
+    pm = TimeSlot.PM
+    with Session(engine) as session:
+        session.add(_tech('a', 'Ann'))
+        session.add(_tech('b', 'Ben'))
+        session.flush()
+        confirm_slice(session, d, am, [Assignment('Morning', 'a', d, am)])
+        confirm_slice(session, d, pm, [Assignment('Evening', 'b', d, pm)])
+        session.commit()
+
+    with Session(engine) as session:
+        am_rows = load_confirmed_assignment_rows_for_slice(session, d, am)
+        pm_rows = load_confirmed_assignment_rows_for_slice(session, d, pm)
+    assert [r['task'] for r in am_rows] == ['Morning']
+    assert [r['task'] for r in pm_rows] == ['Evening']
+    assert all(r['time_slot'] == am.value for r in am_rows)
+    assert all(r['time_slot'] == pm.value for r in pm_rows)
+
+
+def test_delete_draft_slice_keeps_confirmed(engine) -> None:
+    d = date(2026, 10, 1)
+    slot = TimeSlot.AM
+    with Session(engine) as session:
+        session.add(_tech('x', 'X'))
+        session.flush()
+        replace_draft_slice(session, d, slot, [Assignment('DraftTask', 'x', d, slot)])
+        session.add(
+            AssignmentRecord(
+                technician_id='x',
+                task_id='Pub',
+                work_date=d,
+                time_slot=slot,
+                status=AssignmentStatus.CONFIRMED,
+                slot_index=0,
+            )
+        )
+        session.commit()
+
+    with Session(engine) as session:
+        n = delete_draft_slice(session, d, slot)
+        session.commit()
+    assert n == 1
+
+    with Session(engine) as session:
+        rows = session.scalars(select(AssignmentRecord)).all()
+    assert len(rows) == 1
+    assert rows[0].status == AssignmentStatus.CONFIRMED
+    assert rows[0].task_id == 'Pub'
 
 
 def test_technician_ids_missing_from_db(engine) -> None:

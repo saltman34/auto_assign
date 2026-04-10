@@ -10,6 +10,8 @@ from auto_assign.db.adapters import tech_from_technician
 from auto_assign.domain.entities import Tech
 from auto_assign.domain.enums import DailyPreference
 
+TASK_NAMES = ['Clinicals', 'Recuts', 'Scrolls', 'Embedding', 'Exhaust Checks', 'Grossing']
+
 
 def _tech(
     tid: str,
@@ -53,7 +55,7 @@ def test_csv_whitespace_and_mixed_case_roundtrip_through_db(sqlite_engine) -> No
             }
         ]
     )
-    techs = parse_tech_profiles(df)
+    techs = parse_tech_profiles(df, allowed_task_names=TASK_NAMES)
     assert len(techs) == 1
     t0 = techs[0]
     assert t0.tech_id == 't-pipeline'

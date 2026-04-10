@@ -8,6 +8,7 @@ import pytest
 from auto_assign.core.assignment import (
     AssignmentScoringContext,
     DEFAULT_SCORING_WEIGHTS,
+    GreedyOptimizationConfig,
     ScoringWeights,
     assign_greedy,
     assign_tasks,
@@ -184,8 +185,21 @@ def test_tie_break_can_differ_with_different_seeds(work_date: date) -> None:
         TaskRequest('2', 'Same', 1, work_date, TimeSlot.AM),
     ]
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    baseline_opt = GreedyOptimizationConfig(
+        lookahead_tie_breaks=False,
+        local_search_post_pass=False,
+        exact_fallback_max_pool_size=None,
+        strict_dislike_avoidance=False,
+    )
     first_ids = {
-        assign_greedy(reqs, [a, b], scoring_context=ctx, tech_profiles_by_name=profiles, rng=random.Random(seed))[
+        assign_greedy(
+            reqs,
+            [a, b],
+            scoring_context=ctx,
+            tech_profiles_by_name=profiles,
+            optimization=baseline_opt,
+            rng=random.Random(seed),
+        )[
             0
         ].technician_id
         for seed in range(300)
@@ -255,6 +269,123 @@ def test_compatibility_score_fairness_disliked_load_only(work_date: date) -> Non
         variation_bonus=0.0,
     )
     assert compatibility_score(profile, 'Neutral', ctx, w) == -4.0
+
+
+def test_lookahead_tie_break_preserves_future_options(work_date: date) -> None:
+    '''
+    For slot "B", techs B and C tie on score. Lookahead should pick B because
+    removing C would leave fewer options for remaining slot "C".
+    '''
+    rows = [_row('A', work_date), _row('B', work_date), _row('C', work_date)]
+    profiles = {
+        'A': _tech('A', dislikes=['B']),
+        'B': _tech('B', dislikes=['C']),
+        'C': _tech('C'),
+    }
+    reqs = [
+        TaskRequest('1', 'A', 1, work_date, TimeSlot.AM),
+        TaskRequest('2', 'B', 1, work_date, TimeSlot.AM),
+        TaskRequest('3', 'C', 1, work_date, TimeSlot.AM),
+    ]
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    out = assign_greedy(
+        reqs,
+        rows,
+        scoring_context=ctx,
+        tech_profiles_by_name=profiles,
+        optimization=GreedyOptimizationConfig(
+            lookahead_tie_breaks=True,
+            local_search_post_pass=False,
+            exact_fallback_max_pool_size=None,
+            strict_dislike_avoidance=False,
+        ),
+        rng=random.Random(1),
+    )
+    by_task = {a.task_name: a.technician_id for a in out}
+    assert by_task['B'] == 'b'
+
+
+def test_local_swap_post_pass_improves_greedy_tie_outcome(work_date: date) -> None:
+    rows = [_row('A', work_date), _row('B', work_date)]
+    profiles = {
+        'A': _tech('A', favorites=['X', 'Y']),
+        'B': _tech('B', favorites=['X']),
+    }
+    reqs = [
+        TaskRequest('1', 'X', 1, work_date, TimeSlot.AM),
+        TaskRequest('2', 'Y', 1, work_date, TimeSlot.AM),
+    ]
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    out = assign_greedy(
+        reqs,
+        rows,
+        scoring_context=ctx,
+        tech_profiles_by_name=profiles,
+        optimization=GreedyOptimizationConfig(
+            lookahead_tie_breaks=False,
+            local_search_post_pass=True,
+            exact_fallback_max_pool_size=None,
+            strict_dislike_avoidance=False,
+        ),
+        rng=random.Random(1),
+    )
+    by_tech = {a.technician_id: a.task_name for a in out}
+    assert by_tech == {'a': 'Y', 'b': 'X'}
+
+
+def test_exact_fallback_solves_small_slice_optimally(work_date: date) -> None:
+    rows = [_row('A', work_date), _row('B', work_date)]
+    profiles = {
+        'A': _tech('A', favorites=['X', 'Y']),
+        'B': _tech('B', favorites=['X']),
+    }
+    reqs = [
+        TaskRequest('1', 'X', 1, work_date, TimeSlot.AM),
+        TaskRequest('2', 'Y', 1, work_date, TimeSlot.AM),
+    ]
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    out = assign_greedy(
+        reqs,
+        rows,
+        scoring_context=ctx,
+        tech_profiles_by_name=profiles,
+        optimization=GreedyOptimizationConfig(
+            lookahead_tie_breaks=False,
+            local_search_post_pass=False,
+            exact_fallback_max_pool_size=9,
+            strict_dislike_avoidance=False,
+        ),
+        rng=random.Random(1),
+    )
+    by_tech = {a.technician_id: a.task_name for a in out}
+    assert by_tech == {'a': 'Y', 'b': 'X'}
+
+
+def test_strict_dislike_mode_avoids_disliked_when_possible(work_date: date) -> None:
+    rows = [_row('A', work_date), _row('B', work_date)]
+    profiles = {
+        'A': _tech('A', dislikes=['Tasky'], preference=DailyPreference.CONSISTENCY),
+        'B': _tech('B'),
+    }
+    reqs = [TaskRequest('1', 'Tasky', 1, work_date, TimeSlot.AM)]
+    confirmed = (Assignment('Tasky', 'a', work_date, TimeSlot.PM),)
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, confirmed, None)
+    boosted = ScoringWeights(consistency_bonus=8.0)
+    out = assign_greedy(
+        reqs,
+        rows,
+        scoring_context=ctx,
+        tech_profiles_by_name=profiles,
+        weights=boosted,
+        optimization=GreedyOptimizationConfig(
+            lookahead_tie_breaks=True,
+            local_search_post_pass=False,
+            exact_fallback_max_pool_size=None,
+            strict_dislike_avoidance=True,
+        ),
+        rng=random.Random(1),
+    )
+    assert out[0].technician_id == 'b'
 
 
 def test_neutral_profile_when_name_missing_from_map(work_date: date) -> None:
