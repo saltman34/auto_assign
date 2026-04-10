@@ -15,7 +15,7 @@ Streamlit app **Auto Assign**: upload a **schedule CSV**, choose **date** + **sh
 | Item | Notes |
 |------|--------|
 | `app.py` | `configure_page()` + `render_app()` → Streamlit. |
-| `pyproject.toml` | Package `auto-assign-practice`, Python ≥3.11, deps: streamlit, sqlalchemy, alembic, pandas, psycopg, python-dotenv. Dev: pytest, ruff. |
+| `pyproject.toml` | Package `auto-assign`, Python ≥3.11, deps: streamlit, sqlalchemy, alembic, pandas, psycopg, python-dotenv. Dev: pytest, ruff. |
 | `uv.lock` | Locked deps for `uv`. |
 | `.python-version` | `3.11`. |
 | `.env` | **Local only**; listed in `.gitignore`. DB URL — see `.env.example`. |
