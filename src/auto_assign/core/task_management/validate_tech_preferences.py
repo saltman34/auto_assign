@@ -1,5 +1,5 @@
 '''
-Validate technician favorites / dislists against the task catalog in ``task_config``.
+Validate technician favorites / dislikes against a provided task catalog.
 
 Used by CSV parsing and Streamlit form before constructing ``Tech``.
 '''
@@ -8,18 +8,18 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from auto_assign.domain.validators.primitives import normalize_string
-from auto_assign.task_config import tasks
 
 
-def normalized_canonical_task_names() -> frozenset[str]:
-    '''Task display names from ``task_config``, each passed through ``normalize_string``.'''
-    return frozenset(normalize_string(t['task_name']) for t in tasks)
+def normalized_canonical_task_names(task_names: Sequence[str]) -> frozenset[str]:
+    '''Task display names passed through ``normalize_string``.'''
+    return frozenset(normalize_string(t) for t in task_names)
 
 
 def validate_tech_preference_lists(
     favorites_raw: Sequence[str],
     dislikes_raw: Sequence[str],
     *,
+    allowed_task_names: Sequence[str],
     max_each: int = 3,
 ) -> tuple[list[str], list[str]]:
     '''
@@ -30,7 +30,7 @@ def validate_tech_preference_lists(
           ``normalize_string``-ed.
         - No duplicate task names within ``favorites`` or within ``dislikes`` (after normalization).
         - A task cannot appear in both lists.
-        - Every name must match a task in ``task_config`` (after normalization).
+        - Every name must match one value in ``allowed_task_names`` (after normalization).
         - At most ``max_each`` entries per list (default 3).
 
     Returns:
@@ -39,7 +39,7 @@ def validate_tech_preference_lists(
     Raises:
         ValueError: On any rule violation, with an operator-oriented message.
     '''
-    canon = normalized_canonical_task_names()
+    canon = normalized_canonical_task_names(allowed_task_names)
 
     def _normalize_dedupe_list(raw: Sequence[str], *, label: str) -> list[str]:
         seen: set[str] = set()

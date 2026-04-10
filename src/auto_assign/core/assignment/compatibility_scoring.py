@@ -220,6 +220,17 @@ def compatibility_score(
     return score
 
 
+def task_is_disliked(profile: TechScoringProfile, task_name: str) -> bool:
+    '''
+    Purpose:
+        Whether ``task_name`` is on this technician's dislike list (normalized match).
+
+    Used by greedy tie-breaks, strict-avoidance filtering, exact small-pool solver,
+    and local swap post-pass so dislike logic stays in one place.
+    '''
+    return normalize_string(task_name) in profile.dislikes
+
+
 def non_disliker_count(task_name: str, profiles: Sequence[TechScoringProfile]) -> int:
     '''
     Purpose:

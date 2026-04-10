@@ -1,7 +1,7 @@
 '''
 Default bonuses and penalties for greedy compatibility scoring.
 
-**Why a separate module from ``task_config``:** the task catalog (IDs, labels,
+**Why a separate module from the DB-backed task catalog:** task definitions (IDs, labels,
 default headcounts) changes for product reasons; scoring coefficients change
 when tuning assignment quality. Keeping them apart avoids a single bloated
 config and clarifies import boundaries.

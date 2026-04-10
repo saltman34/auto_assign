@@ -1,3 +1,3 @@
-from .task_config import tasks
+'''Auto Assign package.'''
 
-__all__ = ['tasks']
+__all__: list[str] = []

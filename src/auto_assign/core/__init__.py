@@ -10,7 +10,6 @@ from .csv_parsing.get_available_techs import (
     row_is_available_for_time_slot,
 )
 from .csv_parsing.get_available_dates import get_all_schedule_dates
-from .task_management.create_tasks import create_tasks
 from .task_management.validate_tech_preferences import validate_tech_preference_lists
 from .assignment.assignment_service import assign_tasks
 
@@ -24,7 +23,6 @@ __all__ = [
     'row_is_available_for_time_slot',
     'get_all_schedule_dates',
     'load_schedule',
-    'create_tasks',
     'validate_tech_preference_lists',
     'assign_tasks',
 ]

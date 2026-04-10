@@ -12,7 +12,7 @@ from auto_assign.ingestion import TaskRequest, ScheduleRow
 from auto_assign.core.task_management import validate_task_requests
 
 from .greedy_assigner import assign_greedy
-from .scoring_types import AssignmentScoringContext, ScoringWeights
+from .scoring_types import AssignmentScoringContext, GreedyOptimizationConfig, ScoringWeights
 
 
 def _technician_id_for_schedule_row(
@@ -35,7 +35,8 @@ def assign_tasks(
     tech_profiles_by_name: Mapping[str, Tech] | None = None,
     confirmed_assignments: Sequence[Assignment] = (),
     scoring_weights: ScoringWeights | None = None,
-    fairness_lookback_days: int | None = 30,
+    greedy_optimization: GreedyOptimizationConfig | None = None,
+    fairness_lookback_days: int | None = 14,
 ) -> list[Assignment]:
     '''
     Build one assignment per available technician for the same date/slot context.
@@ -48,7 +49,9 @@ def assign_tasks(
 
     **Greedy path** (``use_greedy_assignment=True``): score each tech–task pair,
     fill **most-constrained** slots first, break ties with ``random_seed``.
-    Optional ``tech_profiles_by_name`` supplies favorites/dislikes/preferences;
+    ``greedy_optimization`` defaults to ``GreedyOptimizationConfig()`` (improved
+    policy: lookahead ties, exact small pools, local swap, strict dislike avoidance)
+    when omitted. Optional ``tech_profiles_by_name`` supplies favorites/dislikes;
     missing names get neutral scoring. ``confirmed_assignments`` should be
     **published** history only (see ``docs/assignment_algorithm.md``).
     '''
@@ -71,6 +74,7 @@ def assign_tasks(
             scoring_context=ctx,
             tech_profiles_by_name=tech_profiles_by_name,
             weights=scoring_weights,
+            optimization=greedy_optimization,
             rng=rng,
         )
 

@@ -36,3 +36,18 @@ class AssignmentStatus(Enum):
     DRAFT = 'draft'
     CONFIRMED = 'confirmed'
 
+
+class OverrideScope(Enum):
+    '''Scope of a manual override record.'''
+
+    DAY = 'day'
+    SLICE = 'slice'
+
+
+class OverrideKind(Enum):
+    '''Manual override type for availability or pre-assignment.'''
+
+    CALL_OFF = 'call_off'
+    OVERTIME = 'overtime'
+    MANUAL_ASSIGNMENT = 'manual_assignment'
+

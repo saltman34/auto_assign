@@ -41,6 +41,27 @@ class ScoringWeights:
 
 
 @dataclass(frozen=True)
+class GreedyOptimizationConfig:
+    '''
+    Optional strategy upgrades layered on top of baseline greedy assignment.
+
+    - ``local_search_post_pass``: pairwise swap hill-climb after greedy fill.
+    - ``lookahead_tie_breaks``: when score ties occur, pick the candidate that
+      preserves better future options for remaining slots.
+    - ``exact_fallback_max_pool_size``: if pool size <= this value, solve the
+      full assignment exactly (max-weight matching via DP) instead of greedy.
+      Set to ``None`` to disable exact fallback.
+    - ``strict_dislike_avoidance``: prefer solutions that avoid disliked tasks
+      whenever a feasible alternative exists.
+    '''
+
+    local_search_post_pass: bool = True
+    lookahead_tie_breaks: bool = True
+    exact_fallback_max_pool_size: int | None = 9
+    strict_dislike_avoidance: bool = True
+
+
+@dataclass(frozen=True)
 class AssignmentScoringContext:
     '''
     Everything needed to score a tech–task pair besides the pair itself.
@@ -54,7 +75,7 @@ class AssignmentScoringContext:
     work_date: date
     time_slot: TimeSlot
     confirmed_assignments: tuple[Assignment, ...] = ()
-    lookback_days: int | None = 30
+    lookback_days: int | None = 14
 
 
 @dataclass(frozen=True)

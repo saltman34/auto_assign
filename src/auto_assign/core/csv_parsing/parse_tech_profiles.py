@@ -6,7 +6,7 @@ Expected columns (header row, snake_case):
 - **Required:** ``tech_id``, ``tech_name``, ``daily_preference``
 - **Optional:** ``favorites``, ``dislikes`` — semicolon-separated task names
   (comma also accepted if no semicolons present). Each list is validated: names must match
-  ``task_config`` tasks, no duplicates within a list, no task in both lists, at most three
+  the provided task catalog, no duplicates within a list, no task in both lists, at most three
   per list (see ``validate_tech_preference_lists``).
 
 '''
@@ -77,7 +77,7 @@ def _parse_daily_preference(raw: object) -> DailyPreference:
     raise ValueError(f'Invalid daily_preference {raw!r}. Use one of: {allowed}')
 
 
-def parse_tech_profiles(df: pd.DataFrame) -> list[Tech]:
+def parse_tech_profiles(df: pd.DataFrame, *, allowed_task_names: list[str]) -> list[Tech]:
     '''
     Validate headers and parse each row into ``Tech`` (domain validation in ``Tech.__post_init__``).
     '''
@@ -94,6 +94,7 @@ def parse_tech_profiles(df: pd.DataFrame) -> list[Tech]:
             fav_list, dis_list = validate_tech_preference_lists(
                 _split_task_list(fav_col),
                 _split_task_list(dis_col),
+                allowed_task_names=allowed_task_names,
             )
             rows.append(
                 Tech(
