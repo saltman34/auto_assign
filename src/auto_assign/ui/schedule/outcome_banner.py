@@ -74,7 +74,7 @@ def render_assignment_engine_outcome_banner() -> None:
                 st.warning(w)
         else:
             st.caption(
-                f'Confirmed slice for **{work_date.isoformat()}** · **{slot.value}** is saved. '
+                f'Published slice for **{work_date.isoformat()}** · **{slot.value}** is saved. '
                 'Download a CSV below, dismiss this panel, or start a new run.'
             )
         if load_error:

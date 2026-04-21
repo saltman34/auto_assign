@@ -6,9 +6,15 @@ import html as html_lib
 
 import streamlit as st
 
+from auto_assign.ui.assets import load_favicon
+
 
 def configure_page() -> None:
-    st.set_page_config(page_title='Auto Assign', page_icon=':robot:', layout='wide')
+    st.set_page_config(
+        page_title='Auto Assign',
+        page_icon=load_favicon(),
+        layout='wide',
+    )
 
 
 def render_page_header(title: str, subtitle: str, *, kicker: str | None = None) -> None:
@@ -87,6 +93,26 @@ html, body, [class*="css"] {
   border-bottom: 1px solid var(--aa-border);
 }
 
+.aa-sidebar-brand-row {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+}
+
+.aa-sidebar-brand-mark {
+  flex: 0 0 auto;
+  width: 2.35rem;
+  height: 2.35rem;
+  object-fit: contain;
+  filter: drop-shadow(0 2px 6px rgba(16,185,129,0.25));
+}
+
+.aa-sidebar-brand-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
 .aa-sidebar-brand-title {
   font-family: var(--aa-font-display);
   font-size: 1.28rem;
@@ -100,7 +126,7 @@ html, body, [class*="css"] {
 .aa-sidebar-brand-tagline {
   font-size: 0.8125rem;
   color: var(--aa-subtle) !important;
-  margin: 0.35rem 0 0 0;
+  margin: 0.2rem 0 0 0;
   font-weight: 400;
 }
 
@@ -155,6 +181,12 @@ html, body, [class*="css"] {
   padding: 1rem 1.1rem;
   margin-bottom: 0.75rem;
   box-shadow: 0 4px 24px rgba(0, 0, 0, 0.2);
+}
+
+/* Modifier: draw the eye to a primary call-to-action card. */
+.aa-card--spotlight {
+  border-left-width: 4px;
+  box-shadow: 0 6px 28px rgba(16, 185, 129, 0.22), 0 4px 24px rgba(0, 0, 0, 0.2);
 }
 
 .aa-step {

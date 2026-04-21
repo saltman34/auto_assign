@@ -159,29 +159,31 @@ Separation keeps the assignment logic testable without a browser and limits blas
     'Data model': '''
 **Primary entities**
 
-- **Technicians** — Stable `tech_id`, display name, and task preferences; schedule CSV names resolve here before scoring.
-- **Task catalog** — Canonical task names and default headcounts for the planning UI.
-- **Assignments** — Rows keyed by work date, time slot, and slot index; **`draft`** for iteration, **`confirmed`** after publish.
-- **Overrides** — Day-level availability (e.g. call-off, overtime) and slice-level manual pre-assignments, with draft/confirmed alignment to the assignment workflow.
+- **Technicians** — Stable `tech_id`, display name, favorites, dislikes, daily-preference flag, and two per-task maps keyed by catalog `task_id`: **`eligible_by_task_id`** (hard gate) and **`proficiency_by_task_id`** (scoring signal).
+- **Task catalog** — Canonical task names, stable ids, and default headcounts. Technician eligibility and proficiency maps are keyed against catalog `task_id`.
+- **Assignments** — Rows keyed by `(work_date, time_slot, slot_index)`; **`draft`** for iteration, **`confirmed`** after publish. Each row carries an **`eligibility_overridden`** flag that is true only when an operator explicitly placed a technician on a task they are marked ineligible for.
+- **Overrides** — Day-level availability events (call-off, overtime) and slice-level manual pre-assignments, with draft/confirmed alignment that mirrors the assignment workflow. Manual-override rows also persist `eligibility_overridden` for audit.
 
 **Persistence fit**
 
-The workload is relational (history, slice reloads, fairness lookbacks). PostgreSQL supports indexed queries on date, status, and technician without denormalizing the scheduling story.
+The workload is relational (history, slice reloads, **14-day** fairness lookbacks over confirmed history). PostgreSQL supports indexed queries on date, status, and technician without denormalizing the scheduling story; per-task eligibility and proficiency live in JSON columns on technicians since they're read as a whole per tech, never queried field-by-field.
     '''.strip(),
     'Greedy assignment': '''
-**Procedure**
+**Pipeline (per date + shift)**
 
-1. Apply **manual pre-assignments** (fixed technician–task pairs) for the slice.
-2. Build the **residual** task plan (remaining slots per task).
-3. **Greedily** assign each open slot: among eligible technicians, pick the highest **compatibility score** (preferences and **confirmed** history within a **14-day** lookback), then continue until slots are filled or no candidate remains.
+1. **Manual pre-assignments** — Operator-locked technician–task pairs are applied first. If the operator overrides eligibility to place a technician on a task they aren't certified for (e.g. training or shadowing), that row is flagged `eligibility_overridden` and the technician is **pinned** so the optimizer cannot relocate them.
+2. **Residual plan** — Remaining task slots and the residual pool (available techs minus pinned rows) are computed for the slice.
+3. **Greedy construction** — For each open slot, score every eligible candidate and pick the highest. Ties are broken by a small **lookahead** that preserves downstream options.
+4. **Exact solve (small pools)** — If the residual pool is small enough (default threshold: **≤ 9** technicians), the greedy result is replaced by a full dynamic-programming solve that guarantees the optimum over that pool.
+5. **Local swap post-pass** — A pairwise (2-opt) swap pass runs over the non-pinned assignments, accepting any swap that strictly increases total score. Terminates deterministically.
 
 **Scoring inputs**
 
-Weights combine liked/disliked tasks and recent **confirmed** assignments. The Streamlit UI does not expose scoring knobs; policy is fixed in code for consistency.
+Score combines per-task **eligibility** (hard gate, not a penalty), **proficiency** level, **favorites** and **dislikes**, a **14-day rolling fairness** term over confirmed history, a **daily consistency vs. variation** preference, and same-day repeat handling. Weights live in `scoring_weights_config.py` — fixed in code so runs stay reproducible and the UI stays free of tuning knobs.
 
 **Design trade-off**
 
-A full constraint or ILP solver could seek a global optimum but adds operational cost, slower iteration, and opaque failure modes. The current stack favors **speed**, **auditability**, and a **single** operator-visible behavior.
+A full MILP solve would reach a truly global optimum but adds operational cost, slower iteration, and opaque failure modes. The hybrid **greedy + exact-for-small-pools + local-search** pipeline gets most of the quality of an exact solver for realistic pool sizes, completes a slice in well under a second, and stays explainable slot-by-slot.
     '''.strip(),
     'Reliability': '''
 **Workflow**
@@ -222,7 +224,7 @@ _USER_ENGINE_STEPS_HTML = '''
   <li><strong>Shift</strong> — AM, MID, or PM, then <strong>Continue</strong>. Changing shift later clears the draft and manual rows for the shift you leave.</li>
   <li><strong>Who’s available</strong> — Confirms the pool for this slice. You can’t assign more tasks than there are people in the pool.</li>
   <li><strong>Task counts</strong> — How many of each task you need. <strong>Remaining slots</strong> should end at zero. If you change counts after a draft, click <strong>Generate draft</strong> again. (How picks are made is covered in the auto-placement question below.)</li>
-  <li><strong>Manual assignments (optional)</strong> — Lock specific people to tasks if you need to. Use <strong>Add</strong> for each row; dropdowns alone don’t count. You can skip this step.</li>
+  <li><strong>Manual assignments (optional)</strong> — Lock specific people to tasks if you need to. Use <strong>Add</strong> for each row; dropdowns alone don’t count. If you pick someone the app has marked <em>ineligible</em> for that task, you’ll see a warning with <strong>Override eligibility and add</strong> or <strong>Cancel</strong> — use override for training or shadowing placements. Override rows are recorded in the audit trail and stay pinned (the auto-placer won’t move them). You can skip this step.</li>
   <li><strong>Draft and publish</strong> — <strong>Generate draft</strong> to preview. Then <strong>Publish</strong> to save officially or <strong>Discard draft</strong> to drop the preview. After publishing, follow the on-screen next steps for export or a new run.</li>
 </ol>
 '''.strip()
@@ -230,9 +232,9 @@ _USER_ENGINE_STEPS_HTML = '''
 _USER_TROUBLE_HTML = '''
 <ul>
   <li><strong>Stops after I pick a date</strong> — Database isn’t connected. Set Postgres in your environment and run <code class="aa-mono">alembic upgrade head</code>; the sidebar should show <strong>Database ready</strong>.</li>
-  <li><strong>Can’t move past the date step</strong> — Add at least one task under <strong>Task Catalog</strong>.</li>
+  <li><strong>Can’t move past the date step</strong> — The task catalog is empty. Click <strong>Load demo data</strong> on Home for a sample catalog, or add tasks manually under <strong>Task Catalog</strong>.</li>
   <li><strong>Remaining slots won’t go to zero</strong> — Step 5 totals must exactly match how many technicians are in the pool for that shift.</li>
-  <li><strong>Draft won’t save / unknown technician</strong> — Every name in the CSV needs a matching profile under <strong>Technician Profiles</strong>.</li>
+  <li><strong>Draft won’t save / unknown technician</strong> — Every name in the CSV needs a matching profile. If you’re using the demo, upload the demo schedule downloaded from Home — its names match the seeded roster. If you’re using your own CSV, every <code class="aa-mono">tech_name</code> needs a profile under <strong>Technician Profiles</strong>.</li>
   <li><strong>Draft looks wrong after I changed something</strong> — Run <strong>Generate draft</strong> again after you change headcounts, the pool, or manual rows.</li>
   <li><strong>Nobody in the pool (Step 4)</strong> — Check the CSV for that date and shift, and Step 2 call-offs.</li>
 </ul>
@@ -240,10 +242,13 @@ _USER_TROUBLE_HTML = '''
 
 _AUTO_PLACEMENT_DETAIL_HTML = '''
 <ul>
+  <li><strong>Eligibility is a hard rule</strong> — If a profile marks someone ineligible for a task, the auto-placer won’t put them on it. You can still place them in Step 6 with a confirmed override (for example, training).</li>
+  <li><strong>Proficiency and preferences nudge the pick</strong> — Among eligible candidates, higher proficiency on the task wins a small edge, favorites help, and dislikes penalize.</li>
   <li><strong>Published work is what counts</strong> — Only assignments you’ve <strong>published</strong> affect how the app balances load. Drafts are previews.</li>
-  <li><strong>Recent history matters</strong> — The app looks at roughly the last two weeks of <strong>published</strong> work to spread tasks more fairly. You can’t change those rules from the screen.</li>
+  <li><strong>Recent history matters</strong> — The app looks at roughly the last two weeks of <strong>published</strong> work to spread tasks more fairly and to honor daily consistency or variation settings on each profile.</li>
+  <li><strong>Small shifts get extra care</strong> — When the pool is small, the app performs an exact solve for that shift; larger pools get a greedy fill followed by a pairwise polish pass.</li>
   <li><strong>Same inputs, same draft</strong> — Re-running with the same file, date, shift, and settings gives the same suggestion, so behavior stays predictable.</li>
-  <li><strong>What you can change</strong> — Who is available, how many of each task you need, and optional manual locks—then generate the draft again.</li>
+  <li><strong>What you can change</strong> — Who is available, how many of each task you need, and optional manual locks — then generate the draft again.</li>
 </ul>
 <p style="margin-top:0.75rem;">Technical write-ups live under the <strong>Engineering Notes</strong> tab on this page.</p>
 '''.strip()
@@ -252,11 +257,16 @@ _AUTO_PLACEMENT_DETAIL_HTML = '''
 def _faq_before() -> None:
     st.markdown(
         '''<div class="aa-about-prose">
-<p>Work through these once (or whenever your environment changes) before you rely on <strong>Home</strong> for a real run:</p>
+<p>First, the one thing both paths need:</p>
 <ul>
-  <li><strong>Database</strong> — The sidebar should say <strong>Database ready</strong>. If it doesn’t, connect Postgres (see your team’s deployment notes), then run <code class="aa-mono">alembic upgrade head</code>. Tasks, profiles, and overrides all need the database.</li>
+  <li><strong>Database</strong> — The sidebar should say <strong>Database ready</strong>. If it doesn’t, connect Postgres (see your team’s deployment notes) and run <code class="aa-mono">alembic upgrade head</code>. Tasks, profiles, assignments, and overrides all live in the database.</li>
+</ul>
+<p>Then pick a path:</p>
+<p><strong>Trying the app (demo data)</strong> — On <strong>Home</strong>, click <strong>Load demo data</strong>. That populates the task catalog, an 18-technician roster, and 14 days of published assignment history, and gives you a 7-day schedule CSV to download. Upload that CSV in the Assignment Engine below and you can run the full workflow end-to-end. No other setup required.</p>
+<p><strong>Using your own lab’s data</strong> — Work through these once (or whenever your environment changes):</p>
+<ul>
   <li><strong>Technician profiles</strong> — Every <code class="aa-mono">tech_name</code> in your schedule file must match someone saved under <strong>Technician Profiles</strong>.</li>
-  <li><strong>Task catalog</strong> — Add at least one task. Step 5 builds counts from this list.</li>
+  <li><strong>Task catalog</strong> — Add at least one task under <strong>Task Catalog</strong>. Step 5 builds counts from this list.</li>
   <li><strong>Schedule file</strong> — Shape and columns are described in the next question.</li>
 </ul>
 </div>''',
@@ -278,7 +288,7 @@ def _faq_schedule() -> None:
 def _faq_engine() -> None:
     st.markdown(
         f'''<div class="aa-about-prose">
-<p>On <strong>Home</strong>, go in order and press <strong>Continue</strong> when you’re happy with each step. There is also a <strong>Quick reference</strong> expander on that page while you work.</p>
+<p>On <strong>Home</strong>, go in order and press <strong>Continue</strong> when you’re happy with each step.</p>
 {_USER_ENGINE_STEPS_HTML}
 </div>''',
         unsafe_allow_html=True,
@@ -379,7 +389,7 @@ def render_about_page() -> None:
 
     render_page_header(
         'About this app',
-        'A concise guide for day-to-day operators, plus engineering notes on the stack and design.',
+        'Product overview and operator guide in the first tab; architecture, data model, and assignment policy under Engineering Notes.',
         kicker='Reference',
     )
 
@@ -393,7 +403,8 @@ def render_about_page() -> None:
   </p>
   <div class="aa-about-chip-row">
     <span class="aa-chip">Streamlit · SQLAlchemy · PostgreSQL</span>
-    <span class="aa-chip">Greedy scoring · manual overrides</span>
+    <span class="aa-chip">Greedy + exact solve + local search</span>
+    <span class="aa-chip">Eligibility-pinned manual overrides</span>
     <span class="aa-chip">Draft → publish checkpoint</span>
   </div>
 </div>
@@ -420,12 +431,12 @@ def render_about_page() -> None:
         with st.expander('**What is stored in this app?**', expanded=False):
             st.markdown(
                 '''
-- **Technicians** — Identity and preferences.
-- **Task catalog** — Task labels and defaults.
-- **Assignments** — Draft workspace and confirmed history per slice.
-- **Overrides** — Day availability and slice-level manual rows; aligned with draft/publish.
+- **Technicians** — Identity, favorites and dislikes, per-task **eligibility** (hard gate), and per-task **proficiency** level (scoring signal).
+- **Task catalog** — Task labels, stable ids, and default headcounts.
+- **Assignments** — Draft workspace and published history per slice, including an `eligibility_overridden` flag so training placements stay auditable.
+- **Overrides** — Day availability events and slice-level manual rows; aligned with draft/publish.
 
-Fairness and history scoring use **confirmed** assignments only.
+Fairness and history scoring use **published** assignments only (not drafts).
                 '''.strip()
             )
 
@@ -465,6 +476,10 @@ Fairness and history scoring use **confirmed** assignments only.
             <td><strong>Alembic</strong></td>
             <td>Versioned migrations for reproducible schema and clear evolution in source control.</td>
           </tr>
+          <tr>
+            <td><strong>Deployment (Streamlit Community Cloud + managed Postgres on Supabase)</strong></td>
+            <td><code class="aa-mono">DATABASE_URL</code>-driven config: the same codebase runs against local Postgres in development and the managed instance in production without changes.</td>
+          </tr>
         </tbody>
       </table>
     </div>
@@ -491,8 +506,8 @@ Fairness and history scoring use **confirmed** assignments only.
       <p>Technicians, task catalog, assignments, and overrides map to relational tables and slice-oriented queries.</p>
     </div>
     <div class="aa-about-card">
-      <h4>Greedy assignment</h4>
-      <p>Manual locks first, then greedy fill from a weighted compatibility score.</p>
+      <h4>Assignment pipeline</h4>
+      <p>Pinned manual locks first, then greedy construction from a weighted compatibility score, an exact solve for small pools, and a pairwise swap pass for final polish.</p>
     </div>
     <div class="aa-about-card">
       <h4>Reliability</h4>
@@ -515,7 +530,7 @@ Fairness and history scoring use **confirmed** assignments only.
 ''',
             unsafe_allow_html=True,
         )
-        topic_options = ['Architecture', 'Data model', 'Greedy assignment', 'Reliability']
+        topic_options = ['Greedy assignment', 'Architecture', 'Data model', 'Reliability']
         selected = st.pills(
             'Topic',
             options=topic_options,

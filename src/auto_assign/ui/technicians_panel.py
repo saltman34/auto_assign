@@ -24,8 +24,8 @@ from auto_assign.db import (
     summarize_plan,
 )
 from auto_assign.db.tech_import_plan import TechImportRowPlan
-from auto_assign.domain.entities import Tech, tech_profile_equals
-from auto_assign.domain.enums import DailyPreference
+from auto_assign.domain.entities import Task, Tech, tech_profile_equals
+from auto_assign.domain.enums import DailyPreference, TaskProficiencyLevel
 from auto_assign.domain.validators.primitives import normalize_string
 from auto_assign.ui.db_state import database_url_configured
 from auto_assign.ui.page import render_page_header
@@ -50,6 +50,8 @@ def _tech_to_state(t: Tech) -> dict[str, Any]:
         'daily_preference': t.daily_preference.value,
         'favorites': list(t.favorites),
         'dislikes': list(t.dislikes),
+        'eligible_by_task_id': dict(t.eligible_by_task_id),
+        'proficiency_by_task_id': {k: v.value for k, v in t.proficiency_by_task_id.items()},
     }
 
 
@@ -60,7 +62,54 @@ def _tech_from_state(d: dict[str, Any]) -> Tech:
         daily_preference=DailyPreference(d['daily_preference']),
         favorites=list(d['favorites']),
         dislikes=list(d['dislikes']),
+        eligible_by_task_id=dict(d.get('eligible_by_task_id') or {}),
+        proficiency_by_task_id=dict(d.get('proficiency_by_task_id') or {}),
     )
+
+
+def _capability_editor_dataframe(tasks: list[Task], base: Tech | None) -> pd.DataFrame:
+    rows: list[dict[str, Any]] = []
+    for tk in tasks:
+        elig = True
+        if base is not None and tk.task_id in base.eligible_by_task_id:
+            elig = base.eligible_by_task_id[tk.task_id]
+        prof = TaskProficiencyLevel.INDEPENDENT.value
+        if base is not None and tk.task_id in base.proficiency_by_task_id:
+            prof = base.proficiency_by_task_id[tk.task_id].value
+        rows.append(
+            {
+                'task_id': tk.task_id,
+                'task_name': tk.task_name,
+                'eligible': elig,
+                'proficiency': prof,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _proficiency_from_cell(raw: object) -> TaskProficiencyLevel:
+    if isinstance(raw, TaskProficiencyLevel):
+        return raw
+    s = str(raw).strip().lower().replace(' ', '_').replace('-', '_')
+    for e in TaskProficiencyLevel:
+        if s == e.value or s == e.name.lower():
+            return e
+    return TaskProficiencyLevel.INDEPENDENT
+
+
+def _capabilities_from_editor_df(df: pd.DataFrame) -> tuple[dict[str, bool], dict[str, TaskProficiencyLevel]]:
+    eligible: dict[str, bool] = {}
+    proficiency: dict[str, TaskProficiencyLevel] = {}
+    for rec in df.to_dict(orient='records'):
+        tid = str(rec['task_id']).strip()
+        if not tid:
+            continue
+        if not bool(rec.get('eligible', True)):
+            eligible[tid] = False
+        p = _proficiency_from_cell(rec.get('proficiency', TaskProficiencyLevel.INDEPENDENT.value))
+        if p != TaskProficiencyLevel.INDEPENDENT:
+            proficiency[tid] = p
+    return eligible, proficiency
 
 
 def _plan_rows_state(plans: list[TechImportRowPlan]) -> list[dict[str, Any]]:
@@ -93,6 +142,8 @@ def _plans_from_state(rows: list[dict[str, Any]]) -> list[TechImportRowPlan]:
 def _technicians_dataframe(techs: list[Tech]) -> pd.DataFrame:
     rows = []
     for t in techs:
+        n_inelig = sum(1 for v in t.eligible_by_task_id.values() if v is False)
+        n_prof = len(t.proficiency_by_task_id)
         rows.append(
             {
                 'tech_id': t.tech_id,
@@ -100,6 +151,8 @@ def _technicians_dataframe(techs: list[Tech]) -> pd.DataFrame:
                 'daily_preference': t.daily_preference.value,
                 'favorites': '; '.join(t.favorites),
                 'dislikes': '; '.join(t.dislikes),
+                'ineligible_tasks': n_inelig,
+                'proficiency_overrides': n_prof,
             }
         )
     return pd.DataFrame(rows)
@@ -134,7 +187,8 @@ def _render_profiles_tab(techs: list[Tech]) -> None:
     if not techs:
         st.markdown(
             '<div class="aa-empty">No technicians saved yet. Use <strong>Bulk Import</strong> or '
-            '<strong>Add or Edit Profile</strong> to add profiles.</div>',
+            '<strong>Add or Edit Profile</strong> to add your own — or load demo data from the '
+            '<strong>Home</strong> page for a sample 18-technician roster in one click.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -322,9 +376,10 @@ def _render_csv_tab(task_names: list[str]) -> None:
             st.error(f'Import failed: {e}')
 
 
-def _render_form_tab(task_names: list[str]) -> None:
+def _render_form_tab(tasks: list[Task]) -> None:
     st.markdown('### Add or Update Profile')
     st.caption('Use this form for one-at-a-time profile updates with overwrite confirmation safeguards.')
+    task_names = [t.task_name for t in tasks]
     if not task_names:
         st.info('Add at least one task in Task Catalog before editing favorites/dislikes.')
         return
@@ -368,6 +423,14 @@ def _render_form_tab(task_names: list[str]) -> None:
                 st.rerun()
         return
 
+    with st.expander('Eligibility and proficiency rubric', expanded=False):
+        st.markdown(
+            '- **Eligible:** checked means the technician may be assigned that catalog task. '
+            'Uncheck to **hard-exclude** them from that task (generate will error if no one is left).\n'
+            '- **Proficiency:** combined speed + quality (Novice → Expert). Independent is the neutral '
+            'default (no score bonus). See `docs/proficiency_rubric.md` in the repo for full definitions.'
+        )
+
     with st.form('single_tech_form'):
         f_tech_id = st.text_input(
             'tech_id',
@@ -395,6 +458,28 @@ def _render_form_tab(task_names: list[str]) -> None:
             options=task_names,
             help='Select up to 3 disliked tasks. Cannot overlap favorites.',
         )
+        st.markdown('**Per-task eligibility and proficiency** (catalog `task_id` keys)')
+        cap_df = _capability_editor_dataframe(tasks, base=None)
+        f_cap = st.data_editor(
+            cap_df,
+            column_config={
+                'task_id': st.column_config.TextColumn('task_id', disabled=True),
+                'task_name': st.column_config.TextColumn('task_name', disabled=True),
+                'eligible': st.column_config.CheckboxColumn(
+                    'eligible',
+                    help='Uncheck to exclude this technician from this task entirely.',
+                ),
+                'proficiency': st.column_config.SelectboxColumn(
+                    'proficiency',
+                    options=[e.value for e in TaskProficiencyLevel],
+                    required=True,
+                ),
+            },
+            hide_index=True,
+            use_container_width=True,
+            num_rows='fixed',
+            key='tech_form_capability_editor',
+        )
         submitted = st.form_submit_button('Save technician', type='primary')
 
     if not submitted:
@@ -410,12 +495,15 @@ def _render_form_tab(task_names: list[str]) -> None:
             f_dis,
             allowed_task_names=task_names,
         )
+        elig_map, prof_map = _capabilities_from_editor_df(f_cap if isinstance(f_cap, pd.DataFrame) else cap_df)
         tech = Tech(
             tech_id=f_tech_id.strip(),
             tech_name=f_name.strip(),
             daily_preference=f_pref,
             favorites=fav_list,
             dislikes=dis_list,
+            eligible_by_task_id=elig_map,
+            proficiency_by_task_id=prof_map,
         )
         with session_scope() as session:
             existing_tech = load_tech_by_tech_id(session, tech.tech_id)
@@ -491,6 +579,6 @@ def render_technician_profiles_page() -> None:
     with tabs[1]:
         _render_csv_tab(task_names)
     with tabs[2]:
-        _render_form_tab(task_names)
+        _render_form_tab(task_catalog)
     with tabs[3]:
         _render_delete_tab(techs)

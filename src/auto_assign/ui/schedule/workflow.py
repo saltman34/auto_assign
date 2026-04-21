@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import io
 import zlib
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from typing import cast
@@ -20,6 +20,8 @@ from typing import cast
 import pandas as pd
 import streamlit as st
 
+from auto_assign.core.assignment import NoEligibleTechnicianError
+from auto_assign.core.assignment.headcount_distribution import distribute_defaults_across_pool
 from auto_assign.core import (
     assign_tasks,
     filter_schedule_rows_available_for_date_and_time_slot,
@@ -28,9 +30,11 @@ from auto_assign.core import (
     parse_schedule,
 )
 from auto_assign.core.assignment.manual_overrides import (
+    IneligibleOverrideInfo,
     ResidualPlan,
     apply_day_availability_overrides,
     build_residual_plan_after_manual_assignments,
+    is_tech_eligible_for_catalog_task,
 )
 from auto_assign.domain import Assignment, Tech
 from auto_assign.db import (
@@ -57,7 +61,7 @@ from auto_assign.ui.assignment_history import bump_assignment_history_ui_revisio
 from auto_assign.ui.components import render_context_chips, render_step_divider, render_step_panel
 from auto_assign.ui.db_state import database_url_configured, tech_id_to_display_name
 from auto_assign.ui.page import render_page_header
-from auto_assign.ui.schedule.copy import render_quick_reference_expander, render_schedule_file_requirements_card
+from auto_assign.ui.schedule.copy import render_first_time_setup_expander, render_schedule_file_requirements_card
 from auto_assign.ui.schedule.discard import handle_discard_draft_click
 from auto_assign.ui.schedule.helpers import (
     allocation_context,
@@ -129,6 +133,7 @@ class _PostShiftBundle:
     gen_sig_key: str
     manual_key: str
     manual_step_commit_key: str
+    headcount_commit_key: str
     reset_defaults_flag: str
     manual_assignments: list[Assignment]
     effective_pool: list
@@ -215,7 +220,8 @@ def _wf_load_tasks_and_profiles() -> tuple[list, dict, list] | None:
         techs_all = list_technicians(session)
     if not task_list:
         st.info(
-            'No tasks in the catalog yet. Add tasks on **Task Catalog** before generating assignments.'
+            'No tasks in the catalog yet. Add tasks on **Task Catalog** — or load demo data '
+            'from the panel above to seed a sample catalog and roster in one click.'
         )
         return None
     return task_list, profiles_map, techs_all
@@ -528,53 +534,153 @@ def _wf_render_step_5_headcounts(bundle: _PostShiftBundle) -> _HeadcountControls
     manual_assignments = list(st.session_state.get(b.manual_key, []))
     slice_ctx = b.slice_ctx
     pool_size = b.pool_size
+
+    if database_url_configured():
+        with session_scope() as session:
+            db_draft = load_draft_assignments_for_slice(session, b.selected_date, b.selected_time_slot)
+        if db_draft:
+            st.session_state[b.draft_key] = list(db_draft)
+
+    keys_by_task: list[tuple[str, str]] = [
+        (t.task_id, f'task_count_{t.task_id}_{slice_ctx}') for t in b.task_list
+    ]
+    # Persistent backup of the task counts, decoupled from the number_input widget
+    # keys. Streamlit garbage-collects widget-key session state after the widget
+    # stops rendering (e.g. once Step 5 is locked), so we need to preserve the
+    # committed counts outside the widget namespace or they silently reset to
+    # defaults on later reruns and disable Generate draft in Step 7.
+    counts_backup_key = f'aa_task_counts_backup_{slice_ctx}'
+
+    reset_requested = bool(st.session_state.pop(b.reset_defaults_flag, False))
+    if not reset_requested:
+        backup = st.session_state.get(counts_backup_key) or {}
+        for tid, wk in keys_by_task:
+            if wk not in st.session_state and tid in backup:
+                st.session_state[wk] = int(backup[tid])
+
+    first_render = any(wk not in st.session_state for _, wk in keys_by_task)
+    current_total = sum(int(st.session_state.get(wk, 0)) for _, wk in keys_by_task)
+    overshoot = current_total > pool_size
+
+    scaled_from_defaults = False
+    forced_rebalance = False
+    if reset_requested or first_render:
+        distributed = distribute_defaults_across_pool(
+            [(t.task_id, int(t.default_count)) for t in b.task_list],
+            pool_size,
+        )
+        total_default = sum(int(t.default_count) for t in b.task_list)
+        scaled_from_defaults = total_default > pool_size
+        for tid, wk in keys_by_task:
+            st.session_state[wk] = int(distributed.get(tid, 0))
+        if reset_requested:
+            forced_rebalance = True
+    elif overshoot:
+        distributed = distribute_defaults_across_pool(
+            [(tid, int(st.session_state.get(wk, 0))) for tid, wk in keys_by_task],
+            pool_size,
+        )
+        for tid, wk in keys_by_task:
+            st.session_state[wk] = int(distributed.get(tid, 0))
+        forced_rebalance = True
+
+    if forced_rebalance and st.session_state.get(b.headcount_commit_key):
+        st.session_state[b.headcount_commit_key] = False
+        st.session_state[b.manual_step_commit_key] = False
+
+    task_requests: list[TaskRequest] = [
+        TaskRequest(
+            task_id=task.task_id,
+            task_name=task.task_name,
+            task_count=int(st.session_state.get(keys_by_task[idx][1], 0)),
+            task_date=b.selected_date,
+            time_slot=b.selected_time_slot,
+        )
+        for idx, task in enumerate(b.task_list)
+    ]
+    st.session_state[counts_backup_key] = {
+        tid: int(st.session_state.get(wk, 0)) for tid, wk in keys_by_task
+    }
+    residual_plan = build_residual_plan_after_manual_assignments(
+        task_requests=task_requests,
+        effective_pool=b.effective_pool,
+        manual_assignments=manual_assignments,
+        tech_profiles_by_name=b.profiles_map,
+    )
+    assigned_total = sum(tr.task_count for tr in task_requests)
+    can_generate = assigned_total == pool_size and not residual_plan.errors
+
+    committed = bool(st.session_state.get(b.headcount_commit_key, False))
+
+    if committed:
+        task_requests = _wf_render_step_5_locked(
+            bundle=b,
+            task_requests=task_requests,
+        )
+    else:
+        task_requests = _wf_render_step_5_editable(
+            bundle=b,
+            keys_by_task=keys_by_task,
+            residual_plan=residual_plan,
+            can_generate=can_generate,
+            scaled_from_defaults=scaled_from_defaults,
+            overshoot=overshoot and not (reset_requested or first_render),
+        )
+
+    return _HeadcountControls(
+        can_generate=can_generate,
+        residual_plan=residual_plan,
+        task_requests=task_requests,
+    )
+
+
+def _wf_render_step_5_editable(
+    *,
+    bundle: _PostShiftBundle,
+    keys_by_task: list[tuple[str, str]],
+    residual_plan: ResidualPlan,
+    can_generate: bool,
+    scaled_from_defaults: bool,
+    overshoot: bool,
+) -> list[TaskRequest]:
+    b = bundle
+    slice_ctx = b.slice_ctx
+    pool_size = b.pool_size
     with st.container(border=True):
         render_step_panel(
             'Step 5: Task headcounts',
             f'Task counts must sum to **{pool_size}** (one row per available technician).',
         )
         st.caption(
-            'Adjust counts until **Remaining slots** is zero. Step 6 can fix specific people to tasks first; '
-            'the engine fills everyone else from preferences and recent **confirmed** history.'
+            'Adjust counts until **Remaining slots** is zero, then **Continue** to lock them in.'
         )
 
-        if database_url_configured():
-            with session_scope() as session:
-                db_draft = load_draft_assignments_for_slice(session, b.selected_date, b.selected_time_slot)
-            if db_draft:
-                st.session_state[b.draft_key] = list(db_draft)
-
-        if st.session_state.pop(b.reset_defaults_flag, False):
-            for t in b.task_list:
-                wk = f'task_count_{t.task_id}_{slice_ctx}'
-                st.session_state[wk] = min(t.default_count, pool_size)
+        if scaled_from_defaults:
+            st.caption(
+                f'Catalog defaults sum to more than **{pool_size}** available technicians, so the starting '
+                'counts were scaled down to fit. Adjust any row below and the other maxes update.'
+            )
+        elif overshoot:
+            st.caption(
+                'Previous counts exceeded the current pool (likely because of a new call-off or a shift change). '
+                'They were rebalanced to fit — review the rows below before continuing.'
+            )
 
         task_requests: list[TaskRequest] = []
         for idx, task in enumerate(b.task_list):
-            default_n = min(task.default_count, pool_size)
-            wkey = f'task_count_{task.task_id}_{slice_ctx}'
+            wkey = keys_by_task[idx][1]
 
             other_sum = 0
-            for j, other in enumerate(b.task_list):
+            for j, (_, ok) in enumerate(keys_by_task):
                 if j == idx:
                     continue
-                ok = f'task_count_{other.task_id}_{slice_ctx}'
-                od = min(other.default_count, pool_size)
-                if j < idx:
-                    other_sum += int(st.session_state[ok])
-                elif ok in st.session_state:
-                    other_sum += int(st.session_state[ok])
-                else:
-                    other_sum += od
+                other_sum += int(st.session_state.get(ok, 0))
 
             max_for_task = max(0, pool_size - other_sum)
 
-            if wkey in st.session_state:
-                cur = int(st.session_state[wkey])
-            else:
-                cur = default_n
-            cur = min(max(cur, 0), max_for_task)
-            st.session_state[wkey] = cur
+            cur = min(max(int(st.session_state[wkey]), 0), max_for_task)
+            if cur != int(st.session_state[wkey]):
+                st.session_state[wkey] = cur
 
             count = st.number_input(
                 label=f'{task.task_name} count',
@@ -601,28 +707,21 @@ def _wf_render_step_5_headcounts(bundle: _PostShiftBundle) -> _HeadcountControls
 
         assigned_total = sum(tr.task_count for tr in task_requests)
         remaining = pool_size - assigned_total
-        manual_total = len(manual_assignments)
-        residual_plan = build_residual_plan_after_manual_assignments(
-            task_requests=task_requests,
-            effective_pool=b.effective_pool,
-            manual_assignments=manual_assignments,
-            tech_profiles_by_name=b.profiles_map,
-        )
-        m_col, m2_col, reset_col = st.columns((2, 2, 1))
+        m_col, reset_col = st.columns((3, 1))
         with m_col:
             st.metric('Remaining slots', remaining)
-        with m2_col:
-            st.metric('Manual assignments', manual_total)
         with reset_col:
             st.write('')
             if st.button(
                 'Reset defaults',
                 key=f'task_reset_defaults_{slice_ctx}',
-                help='Reset each task count to its catalog default (capped by available technicians).',
+                help='Reset each task count to its catalog default (scaled down proportionally when the pool is tight).',
             ):
                 st.session_state[b.reset_defaults_flag] = True
+                st.session_state[b.headcount_commit_key] = False
+                st.session_state[b.manual_step_commit_key] = False
                 st.rerun()
-        can_generate = assigned_total == pool_size and not residual_plan.errors
+        recomputed_can_generate = assigned_total == pool_size and not residual_plan.errors
 
         rows = st.session_state.get(b.draft_key)
         if (
@@ -635,25 +734,95 @@ def _wf_render_step_5_headcounts(bundle: _PostShiftBundle) -> _HeadcountControls
                 'to refresh the draft.'
             )
 
-        if not can_generate:
+        if not recomputed_can_generate:
             if assigned_total != pool_size:
-                st.warning('Allocate every available technician to a task (Remaining slots = 0) before generating.')
+                st.warning('Allocate every available technician to a task (Remaining slots = 0) before continuing.')
             for err in residual_plan.errors:
                 if assigned_total != pool_size and err.startswith('Residual mismatch:'):
                     continue
                 st.warning(err)
 
         st.caption(
-            'For how auto-placement works—preferences, **confirmed** history, and fairness—open '
+            'For how auto-placement works—preferences, **published** history, and fairness—open '
             '**About this app** in the sidebar and read **How auto-placement works**. '
             'Regenerate the draft after you change headcounts or who is in the pool.'
         )
 
-    return _HeadcountControls(
-        can_generate=can_generate,
-        residual_plan=residual_plan,
-        task_requests=task_requests,
-    )
+        if st.button(
+            'Continue',
+            type='primary',
+            key=f'headcount_continue_{slice_ctx}',
+            disabled=not (can_generate and recomputed_can_generate),
+            help='Lock these counts and move to manual assignments.',
+        ):
+            st.session_state[b.headcount_commit_key] = True
+            st.rerun()
+        if not (can_generate and recomputed_can_generate):
+            st.caption('**Continue** unlocks once Remaining slots = 0 and there are no warnings above.')
+
+    return task_requests
+
+
+def _wf_render_step_5_locked(
+    *,
+    bundle: _PostShiftBundle,
+    task_requests: list[TaskRequest],
+) -> list[TaskRequest]:
+    b = bundle
+    slice_ctx = b.slice_ctx
+    with st.container(border=True):
+        render_step_panel(
+            'Step 5: Task headcounts — locked',
+            'Counts are locked for this run. Use **Change** to edit them (this also re-opens Step 6).',
+        )
+        summary_rows = [
+            {'Task': tr.task_name, 'Count': int(tr.task_count)}
+            for tr in task_requests
+            if int(tr.task_count) > 0
+        ]
+        if summary_rows:
+            st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+        else:
+            st.caption('No tasks have headcount assigned for this shift.')
+        total = sum(tr.task_count for tr in task_requests)
+        st.metric('Total slots', total)
+        if st.button('Change', key=f'headcount_change_{slice_ctx}'):
+            st.session_state[b.headcount_commit_key] = False
+            st.session_state[b.manual_step_commit_key] = False
+            st.rerun()
+    return task_requests
+
+
+def _manual_display_rows(
+    manual_assignments: Sequence[Assignment],
+    *,
+    profiles_map: dict,
+    tech_by_id: dict[str, Tech],
+) -> list[dict[str, str]]:
+    '''
+    Build the display rows for the Step 6 / Step 7 manual-assignment tables, adding
+    an explicit "eligibility" column so operators can see at a glance which rows
+    bypassed the catalog gate via an explicit override.
+    '''
+    rows: list[dict[str, str]] = []
+    for a in manual_assignments:
+        tech = tech_by_id.get(a.technician_id)
+        currently_ineligible = (
+            tech is not None and not is_tech_eligible_for_catalog_task(tech, a.catalog_task_id)
+        )
+        if a.eligibility_overridden or currently_ineligible:
+            elig_label = 'Overridden (ineligible)'
+        else:
+            elig_label = 'OK'
+        rows.append(
+            {
+                'task': a.task_name,
+                'technician': tech_id_to_display_name(a.technician_id, profiles_map),
+                'tech_id': a.technician_id,
+                'eligibility': elig_label,
+            }
+        )
+    return rows
 
 
 def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
@@ -661,6 +830,7 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
     manual_assignments = list(st.session_state.get(b.manual_key, []))
     manual_step_committed = bool(st.session_state.get(b.manual_step_commit_key, False))
     slice_ctx = b.slice_ctx
+    pending_override_key = f'aa_manual_pending_override_{slice_ctx}'
     if manual_step_committed:
         with st.container(border=True):
             render_step_panel(
@@ -672,21 +842,26 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
                 'Use **Change** to add, remove, or clear before generating.'
             )
             if manual_assignments:
-                man_df = pd.DataFrame(
-                    [
-                        {
-                            'task': a.task_name,
-                            'technician': tech_id_to_display_name(a.technician_id, b.profiles_map),
-                            'tech_id': a.technician_id,
-                        }
-                        for a in manual_assignments
-                    ]
+                display_rows = _manual_display_rows(
+                    manual_assignments,
+                    profiles_map=b.profiles_map,
+                    tech_by_id=b.tech_by_id,
                 )
+                man_df = pd.DataFrame(display_rows)
                 st.dataframe(man_df, use_container_width=True, hide_index=True)
+                n_overridden = sum(1 for a in manual_assignments if a.eligibility_overridden)
+                if n_overridden:
+                    st.warning(
+                        f'**{n_overridden}** manual row(s) bypass catalog eligibility. '
+                        'These technicians are not certified for the assigned task — the operator '
+                        'confirmed this explicitly (e.g. training / shadowing). The override is '
+                        'persisted for audit.'
+                    )
             else:
                 st.caption('No manual assignments — everyone will be placed from task counts.')
             if st.button('Change', key=f'manual_change_{slice_ctx}'):
                 st.session_state[b.manual_step_commit_key] = False
+                st.session_state.pop(pending_override_key, None)
                 st.rerun()
         return True
     with st.container(border=True):
@@ -716,42 +891,96 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
             )
         else:
             st.caption('All available technicians for this shift are already in the list below.')
+
+        pending_override = st.session_state.get(pending_override_key)
+
+        def _commit_manual_assignment(*, overridden: bool) -> None:
+            assert manual_task is not None and manual_tech is not None
+            manual_assignments.append(
+                Assignment(
+                    task_name=manual_task.task_name,
+                    catalog_task_id=manual_task.task_id,
+                    technician_id=manual_tech,
+                    date_assigned=b.selected_date,
+                    time_slot=b.selected_time_slot,
+                    eligibility_overridden=overridden,
+                )
+            )
+            with session_scope() as session:
+                replace_draft_manual_assignments_for_slice(
+                    session, b.selected_date, b.selected_time_slot, manual_assignments
+                )
+            st.session_state[b.manual_key] = list(manual_assignments)
+            st.session_state.pop(pending_override_key, None)
+            toast_msg = (
+                'Manual override saved (eligibility bypassed).'
+                if overridden
+                else 'Manual assignment saved.'
+            )
+            st.toast(toast_msg, icon='✅')
+            st.rerun()
+
         if st.button(
             'Add',
             key=f'manual_add_{slice_ctx}',
-            disabled=(not manual_tech_options) or (manual_tech is None),
+            disabled=(
+                (not manual_tech_options)
+                or (manual_tech is None)
+                or pending_override is not None
+            ),
         ):
             if manual_task is not None and manual_tech is not None:
-                try:
-                    manual_assignments.append(
-                        Assignment(
-                            task_name=manual_task.task_name,
-                            technician_id=manual_tech,
-                            date_assigned=b.selected_date,
-                            time_slot=b.selected_time_slot,
-                        )
-                    )
-                    with session_scope() as session:
-                        replace_draft_manual_assignments_for_slice(
-                            session, b.selected_date, b.selected_time_slot, manual_assignments
-                        )
-                    st.session_state[b.manual_key] = list(manual_assignments)
-                    st.toast('Manual assignment saved.', icon='✅')
+                tech = b.tech_by_id.get(manual_tech)
+                eligible = tech is None or is_tech_eligible_for_catalog_task(
+                    tech, manual_task.task_id
+                )
+                if eligible:
+                    try:
+                        _commit_manual_assignment(overridden=False)
+                    except Exception as e:
+                        st.error(f'Could not add manual assignment: {e}')
+                else:
+                    st.session_state[pending_override_key] = {
+                        'task_id': manual_task.task_id,
+                        'task_name': manual_task.task_name,
+                        'tech_id': manual_tech,
+                    }
                     st.rerun()
-                except Exception as e:
-                    st.error(f'Could not add manual assignment: {e}')
+
+        if pending_override is not None:
+            pending_tech = b.tech_by_id.get(pending_override['tech_id'])
+            pending_tech_label = (
+                pending_tech.tech_name if pending_tech is not None else pending_override['tech_id']
+            )
+            st.warning(
+                f'**{pending_tech_label}** is not certified for **{pending_override["task_name"]}** '
+                '(the catalog marks them as ineligible). '
+                'Assign anyway only if this is a training / shadowing placement — the override will '
+                'be recorded in the audit log.'
+            )
+            ov_col, cancel_col = st.columns((1, 1))
+            with ov_col:
+                if st.button(
+                    'Override eligibility and add',
+                    key=f'manual_override_confirm_{slice_ctx}',
+                    type='primary',
+                ):
+                    try:
+                        _commit_manual_assignment(overridden=True)
+                    except Exception as e:
+                        st.error(f'Could not add manual assignment: {e}')
+            with cancel_col:
+                if st.button('Cancel', key=f'manual_override_cancel_{slice_ctx}'):
+                    st.session_state.pop(pending_override_key, None)
+                    st.rerun()
 
         if manual_assignments:
-            man_df = pd.DataFrame(
-                [
-                    {
-                        'task': a.task_name,
-                        'technician': tech_id_to_display_name(a.technician_id, b.profiles_map),
-                        'tech_id': a.technician_id,
-                    }
-                    for a in manual_assignments
-                ]
+            display_rows = _manual_display_rows(
+                manual_assignments,
+                profiles_map=b.profiles_map,
+                tech_by_id=b.tech_by_id,
             )
+            man_df = pd.DataFrame(display_rows)
             st.dataframe(man_df, use_container_width=True, hide_index=True)
             remove_idx = st.selectbox(
                 'Remove assignment row',
@@ -769,6 +998,7 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
                                 session, b.selected_date, b.selected_time_slot, manual_assignments
                             )
                         st.session_state[b.manual_key] = list(manual_assignments)
+                        st.session_state.pop(pending_override_key, None)
                         st.toast('Manual assignment removed.', icon='✅')
                         st.rerun()
                     except Exception as e:
@@ -781,6 +1011,7 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
                                 session, b.selected_date, b.selected_time_slot, []
                             )
                         st.session_state[b.manual_key] = []
+                        st.session_state.pop(pending_override_key, None)
                         st.toast('Manual assignments cleared.', icon='✅')
                         st.rerun()
                     except Exception as e:
@@ -789,6 +1020,12 @@ def _wf_render_step_6_manual(bundle: _PostShiftBundle) -> bool:
                 'Continue with manual assignments',
                 type='primary',
                 key=f'manual_continue_with_{slice_ctx}',
+                disabled=pending_override is not None,
+                help=(
+                    'Resolve the pending eligibility override before continuing.'
+                    if pending_override is not None
+                    else None
+                ),
             ):
                 st.session_state[b.manual_step_commit_key] = True
                 st.rerun()
@@ -827,7 +1064,7 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
             st.markdown(
                 '- A **draft** is a preview only and can be discarded safely.\n'
                 '- **Publish** saves the official schedule for this date and shift.\n'
-                '- Re-publishing the same date/shift replaces the existing confirmed slice '
+                '- Re-publishing the same date/shift replaces the existing published slice '
                 '(with a confirmation step).'
             )
         if st.button('Generate draft', disabled=not hc.can_generate, type='primary'):
@@ -884,6 +1121,11 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                     st.session_state[b.draft_key] = assignments
                     st.session_state[b.gen_sig_key] = task_count_signature(hc.task_requests)
                 st.success('Draft generated — scroll down in this box to review, then publish or discard draft.')
+            except NoEligibleTechnicianError as e:
+                st.error(
+                    f'No **eligible** technician for task **{e.task_name}** (catalog id `{e.catalog_task_id}`). '
+                    'Adjust per-task eligibility on **Technician Profiles** or change headcounts / pool.'
+                )
             except Exception as e:
                 st.error(f'Could not generate assignments: {e}')
 
@@ -912,9 +1154,19 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                     'task': a.task_name,
                     'technician': tech_id_to_display_name(a.technician_id, profiles_map_disp),
                     'tech_id': a.technician_id,
+                    'eligibility': (
+                        'Overridden (ineligible)' if a.eligibility_overridden else 'OK'
+                    ),
                 }
                 for a in rows
             ]
+            n_overridden_draft = sum(1 for a in rows if a.eligibility_overridden)
+            if n_overridden_draft:
+                st.warning(
+                    f'This draft includes **{n_overridden_draft}** manual override row(s) that '
+                    'bypass catalog eligibility (training / shadowing). The override flag is saved '
+                    'with the published slice for audit.'
+                )
             _csv_buf = io.StringIO()
             pd.DataFrame(disp).to_csv(_csv_buf, index=False)
             _draft_spacer_col, _draft_dl_col = st.columns((3, 1))
@@ -960,9 +1212,9 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                 overwrite_ok = True
                 if n_confirmed > 0:
                     st.warning(
-                        f'This date and shift already has **{n_confirmed}** confirmed row(s). '
+                        f'This date and shift already has **{n_confirmed}** published row(s). '
                         '**Publish** will **replace** that official slice. '
-                        'Assignment history shows the latest confirmed version for this date/shift.'
+                        'Assignment history shows the latest published version for this date/shift.'
                     )
                     published_preview: list[dict] = []
                     try:
@@ -1008,7 +1260,7 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                 confirm_disabled = (n_confirmed > 0 and not overwrite_ok) or bool(missing_fk)
                 st.markdown('##### Review & publish')
                 st.caption(
-                    '**Discard draft** removes this working copy only (confirmed schedules are unchanged). '
+                    '**Discard draft** removes this working copy only (published schedules are unchanged). '
                     '**Publish** saves this table as the official assignment.'
                 )
                 discard_col, publish_col = st.columns(2, gap='small')
@@ -1017,7 +1269,7 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                         'Discard draft',
                         key=f'discard_draft_{slice_ctx}',
                         type='secondary',
-                        help='Remove this draft from the database. Does not change published (confirmed) rows.',
+                        help='Remove this draft from the database. Does not change published rows.',
                     ):
                         handle_discard_draft_click(
                             b.draft_key,
@@ -1055,7 +1307,7 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                                     )
                                 st.session_state[_SS_ASSIGN_FLASH] = {
                                     'message': (
-                                        '**Schedule published.** The confirmed slice is saved in the database. '
+                                        '**Schedule published.** The published slice is saved in the database. '
                                         f'Manual override audit rows captured: **{promoted_overrides}**. '
                                         'Day-wide staffing overrides remain editable for this date until you clear them. '
                                         'Use **Published — next steps** below for a CSV, **Dismiss**, or **Start a new run**.'
@@ -1071,14 +1323,14 @@ def _wf_render_step_7_generate_publish(bundle: _PostShiftBundle, hc: _HeadcountC
                                 st.session_state.pop(b.gen_sig_key, None)
                                 st.session_state.pop(b.manual_key, None)
                                 bump_assignment_history_ui_revision()
-                                st.toast('Schedule published — confirmed slice saved.', icon='✅')
+                                st.toast('Schedule published — slice saved.', icon='✅')
                                 st.rerun()
                             except Exception as e:
                                 st.error(f'Could not confirm: {e}')
 
 
 def render_schedule_workflow() -> None:
-    render_quick_reference_expander()
+    render_first_time_setup_expander()
     render_schedule_file_requirements_card()
     uploader_nonce = int(st.session_state.get(_SS_SCHED_NONCE, 0))
     uploaded_file = st.file_uploader(
@@ -1150,6 +1402,7 @@ def render_schedule_workflow() -> None:
         gen_sig_key = f'aa_last_gen_sig_{slice_ctx}'
         manual_key = f'aa_manual_assignments_{slice_ctx}'
         manual_step_commit_key = f'aa_manual_step_committed_{slice_ctx}'
+        headcount_commit_key = f'aa_headcount_committed_{slice_ctx}'
         _reset_defaults_flag = f'_aa_pending_reset_task_counts_{slice_ctx}'
         if manual_key not in st.session_state:
             with session_scope() as session:
@@ -1192,6 +1445,7 @@ def render_schedule_workflow() -> None:
             gen_sig_key=gen_sig_key,
             manual_key=manual_key,
             manual_step_commit_key=manual_step_commit_key,
+            headcount_commit_key=headcount_commit_key,
             reset_defaults_flag=_reset_defaults_flag,
             manual_assignments=manual_assignments,
             effective_pool=effective_pool,
@@ -1203,6 +1457,9 @@ def render_schedule_workflow() -> None:
         _wf_render_step_4_available_pool(bundle)
         render_step_divider()
         hc = _wf_render_step_5_headcounts(bundle)
+        if not st.session_state.get(bundle.headcount_commit_key, False):
+            return
+        render_step_divider()
         if not _wf_render_step_6_manual(bundle):
             return
         render_step_divider()

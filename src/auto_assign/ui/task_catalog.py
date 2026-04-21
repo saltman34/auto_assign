@@ -5,7 +5,13 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from auto_assign.db import create_task, delete_task, list_tasks, set_task_default_count, session_scope
+from auto_assign.db import (
+    create_task,
+    delete_task,
+    list_tasks,
+    session_scope,
+    set_task_default_count,
+)
 from auto_assign.domain.entities import Task
 from auto_assign.ui.components import render_step_panel
 from auto_assign.ui.db_state import database_url_configured
@@ -17,7 +23,10 @@ _TASK_PICK_NONE = object()
 
 def _tasks_display_dataframe(tasks: list[Task]) -> pd.DataFrame:
     """Columns use human-facing labels; internal task_id is omitted from the grid."""
-    rows = [{'Task name': t.task_name, 'Default headcount': int(t.default_count)} for t in tasks]
+    rows = [
+        {'Task name': t.task_name, 'Default headcount': int(t.default_count)}
+        for t in tasks
+    ]
     return pd.DataFrame(rows)
 
 
@@ -40,7 +49,8 @@ def _render_catalog_tab(tasks: list[Task]) -> None:
     )
     if not tasks:
         st.markdown(
-            '<div class="aa-empty">No tasks saved yet. Use <strong>Add Task</strong> to create your first one.</div>',
+            '<div class="aa-empty">No tasks saved yet. Use <strong>Add Task</strong> to create your own — '
+            'or load demo data from the <strong>Home</strong> page for a sample 6-task catalog.</div>',
             unsafe_allow_html=True,
         )
     else:
@@ -69,7 +79,7 @@ def _render_add_task_tab() -> None:
         try:
             with session_scope() as session:
                 row = create_task(session, new_name, default_count=int(new_default))
-            st.success(f'Added “{row.task_name}” with default headcount {int(row.default_count)}.')
+            st.success(f'Added “{row.task_name}” (default headcount {int(row.default_count)}).')
             st.rerun()
         except Exception as e:
             st.error(f'Could not add task: {e}')
@@ -81,7 +91,10 @@ def _render_update_tasks_tab(tasks: list[Task]) -> None:
         'Pick a task, then use **Edit default** or **Delete from catalog** — each action stays on its own tab so the flow stays clear.'
     )
     if not tasks:
-        st.info('No tasks available yet. Add one from the **Add Task** tab first.')
+        st.info(
+            'No tasks available yet. Add one from the **Add Task** tab — or load demo data '
+            'from **Home** for a sample catalog.'
+        )
         return
 
     pick_options: list[object] = [_TASK_PICK_NONE, *tasks]
@@ -138,9 +151,11 @@ def _render_update_tasks_tab(tasks: list[Task]) -> None:
         tab_adjust, tab_remove = st.tabs(['Edit default', 'Delete from catalog'])
 
         with tab_adjust:
-            st.markdown('**Default headcount** is how many slots the Assignment Engine suggests for this task before '
-                        'you set real counts for a specific date on **Home**. Changing it here does not change '
-                        'past published schedules.')
+            st.markdown(
+                '**Default headcount** is how many slots the Assignment Engine suggests for this task '
+                'before you set real counts for a specific date on **Home**. Changing it here does not '
+                'rewrite past schedules.'
+            )
             update_default = st.number_input(
                 'Default headcount',
                 min_value=0,
@@ -149,11 +164,11 @@ def _render_update_tasks_tab(tasks: list[Task]) -> None:
                 key=f'task_catalog_update_default_{selected.task_id}',
                 help='Saved as this task’s default in the catalog; per-day counts are chosen when you run assignments.',
             )
-            if st.button('Save default headcount', key='task_catalog_update_btn', type='primary'):
+            if st.button('Save default', key='task_catalog_update_btn', type='primary'):
                 try:
                     with session_scope() as session:
                         set_task_default_count(session, selected.task_id, int(update_default))
-                    st.success(f'Updated default headcount for `{selected.task_name}`.')
+                    st.success(f'Updated default for `{selected.task_name}` to {int(update_default)}.')
                     st.rerun()
                 except Exception as e:
                     st.error(f'Could not update task: {e}')
@@ -204,8 +219,10 @@ def render_task_catalog_page() -> None:
         '''
 <div class="aa-card">
   <div class="aa-kicker">Task Catalog Data Model</div>
-  Tasks are stable labels with optional default headcounts. They define which names appear in preference
-  columns and what the engine suggests before you adjust counts for a specific date or shift.
+  Tasks are stable labels with an optional default headcount. The default headcount is the
+  starting slot count the Assignment Engine suggests per shift. When catalog defaults sum to more
+  than the available pool on a given day, Step 5 scales each task down proportionally so no task
+  gets unfairly zeroed out.
 </div>
 ''',
         unsafe_allow_html=True,

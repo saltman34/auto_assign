@@ -26,7 +26,7 @@ def bump_assignment_history_ui_revision() -> None:
 def render_assignment_history_page() -> None:
     render_page_header(
         'Assignment history',
-        'Review published (confirmed) assignments by date. Filter by shift, technician, or task.',
+        'Review published assignments by date. Filter by shift, technician, or task.',
         kicker='Read-only',
     )
     if not database_url_configured():
@@ -38,7 +38,7 @@ def render_assignment_history_page() -> None:
 
     rev = int(st.session_state.get(_SS_HISTORY_UI_REVISION, 0))
     st.caption(
-        'Only **published** (confirmed) rows appear here—not drafts. After you **Publish** on Home, '
+        'Only **published** rows appear here — not drafts. After you **Publish** on Home, '
         'this page selects the newest date automatically; change the date to see other days.'
     )
 
@@ -51,7 +51,7 @@ def render_assignment_history_page() -> None:
 
     if not dates:
         st.markdown(
-            '<div class="aa-empty">No confirmed assignments yet. Publish a schedule from '
+            '<div class="aa-empty">No published assignments yet. Publish a schedule from '
             '<strong>Home → Assignment Engine</strong> to see history here.</div>',
             unsafe_allow_html=True,
         )
@@ -73,7 +73,7 @@ def render_assignment_history_page() -> None:
         return
 
     if not rows:
-        st.info('No confirmed rows for this date.')
+        st.info('No published rows for this date.')
         return
 
     df = pd.DataFrame(rows)
@@ -149,7 +149,7 @@ def render_assignment_history_page() -> None:
         st.download_button(
             'Download filtered view as CSV',
             data=buf.getvalue().encode('utf-8'),
-            file_name=f'confirmed_assignments_{pick.isoformat()}.csv',
+            file_name=f'published_assignments_{pick.isoformat()}.csv',
             mime='text/csv',
             key='history_download_csv',
         )

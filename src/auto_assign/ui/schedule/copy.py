@@ -5,13 +5,27 @@ from __future__ import annotations
 import streamlit as st
 
 
-def render_quick_reference_expander() -> None:
-    with st.expander('Quick reference', expanded=False):
+def render_first_time_setup_expander() -> None:
+    '''Expander aimed at first-time users who are *not* using the seeded demo.
+
+    The Home page also offers a one-click "Load demo data" panel that populates
+    Technician Profiles and the Task Catalog in the database. Users who take
+    that path can skip this section entirely; they already have the data a
+    schedule needs to reference. This expander exists for the other path —
+    someone wiring the app up against their own lab's roster and tasks — so
+    the title and body are explicit about that audience instead of pretending
+    to be a generic "quick reference."
+    '''
+    with st.expander('Using your own data? First-time setup (skip for the demo)', expanded=False):
         st.markdown(
-            '- **Before first use:** load **Technician Profiles** and **Task Catalog** from the sidebar.\n'
-            '- **Upload** a schedule CSV, then use **Continue** at each step in order.\n'
-            '- **Generate draft**, review, then **Publish** or **Discard**.\n'
-            '- **Assignment history** lists published dates.'
+            'If you loaded demo data above, **skip this** — Technician Profiles '
+            'and the Task Catalog are already populated.\n\n'
+            '**Bringing your own lab\'s data?** Before you upload a schedule:\n\n'
+            '- Load **Technician Profiles** from the sidebar so every `tech_name` '
+            'in your CSV maps to a `tech_id` and preferences are available for scoring.\n'
+            '- Load the **Task Catalog** from the sidebar with the tasks you assign '
+            'and their default daily counts.\n\n'
+            'Once both pages have rows, return here and upload your schedule CSV below.'
         )
 
 
