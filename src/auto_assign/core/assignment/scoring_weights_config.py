@@ -22,4 +22,8 @@ DEFAULT_SCORING_WEIGHTS = ScoringWeights(
     fairness_disliked_load_penalty=1.0,
     consistency_bonus=3.0,
     variation_bonus=3.0,
+    proficiency_novice_bonus=0.0,
+    proficiency_independent_bonus=0.0,
+    proficiency_strong_bonus=0.5,
+    proficiency_expert_bonus=1.0,
 )

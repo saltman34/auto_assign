@@ -1,5 +1,5 @@
 '''
-Pure compatibility score for one technician and one task name.
+Pure compatibility score for one technician and one catalog task + display name.
 
 Implements the additive model from ``docs/assignment_algorithm.md`` without
 I/O or assignment side effects, so unit tests can pin each term independently.
@@ -10,10 +10,21 @@ from collections.abc import Sequence
 from datetime import timedelta
 
 from auto_assign.domain import Assignment
-from auto_assign.domain.enums import DailyPreference
+from auto_assign.domain.enums import DailyPreference, TaskProficiencyLevel
 from auto_assign.domain.validators.primitives import normalize_string, normalize_tech_id
 
 from .scoring_types import AssignmentScoringContext, ScoringWeights, TechScoringProfile
+
+
+class NoEligibleTechnicianError(ValueError):
+    '''Raised when every pool member is ineligible for a required task slot.'''
+
+    def __init__(self, catalog_task_id: str, task_name: str) -> None:
+        self.catalog_task_id = catalog_task_id
+        self.task_name = task_name
+        super().__init__(
+            f'No eligible technician for task {task_name!r} (catalog_task_id={catalog_task_id!r})'
+        )
 
 
 def _assignment_in_lookback(a: Assignment, ctx: AssignmentScoringContext) -> bool:
@@ -162,31 +173,68 @@ def _other_slot_same_day_assignment(
     return None
 
 
+def is_eligible_for_task(profile: TechScoringProfile, task_id: str) -> bool:
+    '''
+    Hard gate: ``False`` only when ``task_id`` is listed in ``profile.ineligible_task_ids``.
+    Absent keys mean eligible.
+    '''
+    return task_id not in profile.ineligible_task_ids
+
+
+def _proficiency_level_for_task(profile: TechScoringProfile, task_id: str) -> TaskProficiencyLevel:
+    for tid, lvl in profile.proficiency_pairs:
+        if tid == task_id:
+            return lvl
+    return TaskProficiencyLevel.INDEPENDENT
+
+
+def proficiency_score_delta(profile: TechScoringProfile, task_id: str, weights: ScoringWeights) -> float:
+    '''
+    Additive bonus from ``TaskProficiencyLevel`` for this catalog ``task_id``.
+    Absent proficiency behaves like **independent** (uses ``proficiency_independent_bonus``, default 0).
+    '''
+    lvl = _proficiency_level_for_task(profile, task_id)
+    if lvl == TaskProficiencyLevel.NOVICE:
+        return weights.proficiency_novice_bonus
+    if lvl == TaskProficiencyLevel.INDEPENDENT:
+        return weights.proficiency_independent_bonus
+    if lvl == TaskProficiencyLevel.STRONG:
+        return weights.proficiency_strong_bonus
+    if lvl == TaskProficiencyLevel.EXPERT:
+        return weights.proficiency_expert_bonus
+    return 0.0
+
+
 def compatibility_score(
     profile: TechScoringProfile,
+    task_id: str,
     task_name: str,
     ctx: AssignmentScoringContext,
     weights: ScoringWeights,
 ) -> float:
     '''
     Purpose:
-        Compute a single **higher-is-better** number for assigning ``task_name``
-        to the technician described by ``profile``, combining favorites, dislikes,
+        Compute a single **higher-is-better** number for assigning this task
+        to the technician described by ``profile``, combining eligibility (hard),
+        proficiency (the only per-pair starting term), favorites, dislikes,
         fairness history, and same-day preference.
 
     Inputs:
-        ``profile``: Technician scoring view (favorites, dislikes, daily preference).
-        ``task_name``: Task label for the open slot (normalized internally for comparisons).
+        ``profile``: Technician scoring view.
+        ``task_id``: Catalog task id (eligibility / proficiency keys).
+        ``task_name``: Task label for favorites/dislikes and display (normalized internally).
         ``ctx``: Current ``work_date``, ``time_slot``, confirmed history, lookback.
         ``weights``: Numeric bonuses and penalties for each score term.
 
     Returns:
-        A ``float`` score (not normalized); ties in the greedy assigner are broken
-        elsewhere. Tasks neither favorited nor disliked still get fairness and
-        same-day terms when applicable.
+        Negative infinity when the technician is **not** eligible for ``task_id``
+        (hard gate). Otherwise a finite ``float`` score.
     '''
+    if not is_eligible_for_task(profile, task_id):
+        return float('-inf')
+
     task_n = normalize_string(task_name)
-    score = 0.0
+    score = proficiency_score_delta(profile, task_id, weights)
 
     # Explicit preference: reward tasks the tech marked as favorites.
     if task_n in profile.favorites:
@@ -229,6 +277,24 @@ def task_is_disliked(profile: TechScoringProfile, task_name: str) -> bool:
     and local swap post-pass so dislike logic stays in one place.
     '''
     return normalize_string(task_name) in profile.dislikes
+
+
+def eligible_non_disliker_count(
+    task_id: str,
+    task_name: str,
+    profiles: Sequence[TechScoringProfile],
+) -> int:
+    '''
+    Count pool members who are **eligible** for ``task_id`` and do not dislike ``task_name``.
+
+    Used for most-constrained-first slot ordering when eligibility gates apply.
+    '''
+    task_n = normalize_string(task_name)
+    return sum(
+        1
+        for p in profiles
+        if is_eligible_for_task(p, task_id) and task_n not in p.dislikes
+    )
 
 
 def non_disliker_count(task_name: str, profiles: Sequence[TechScoringProfile]) -> int:

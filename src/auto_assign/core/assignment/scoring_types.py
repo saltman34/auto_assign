@@ -10,18 +10,29 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import NamedTuple
 
 from auto_assign.domain import Assignment
 from auto_assign.domain.entities import Tech
-from auto_assign.domain.enums import DailyPreference, TimeSlot
+from auto_assign.domain.enums import DailyPreference, TaskProficiencyLevel, TimeSlot
 from auto_assign.domain.validators.primitives import normalize_string, normalize_tech_id
 from auto_assign.ingestion import ScheduleRow
+
+
+class TaskSlotRef(NamedTuple):
+    '''One headcount slot: catalog ``task_id`` + normalized display name for scoring.'''
+
+    catalog_task_id: str
+    task_name: str
 
 
 @dataclass(frozen=True)
 class ScoringWeights:
     '''
     Tunable coefficients for the additive compatibility score.
+
+    ``compatibility_score`` starts from proficiency only, then applies these
+    bonuses and penalties; there is no separate neutral per-pair base prior.
 
     All values are in abstract "points"; tune together so no single term
     dominates unless intended.
@@ -38,6 +49,11 @@ class ScoringWeights:
     fairness_disliked_load_penalty: float = 1.0
     consistency_bonus: float = 3.0
     variation_bonus: float = 3.0
+    # Per ``TaskProficiencyLevel`` additive bonus when eligible (absent key = independent → 0).
+    proficiency_novice_bonus: float = 0.0
+    proficiency_independent_bonus: float = 0.0
+    proficiency_strong_bonus: float = 0.5
+    proficiency_expert_bonus: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -85,6 +101,10 @@ class TechScoringProfile:
 
     Built from ``Tech`` when a profile exists, or as a **neutral** profile when
     the schedule row has no matching persisted tech (no favorite/dislike signal).
+
+    ``ineligible_task_ids`` lists catalog ``task_id`` values explicitly marked not
+    eligible (hard gate). ``proficiency_pairs`` is sorted ``(task_id, level)`` for
+    hashability in this frozen type.
     '''
 
     tech_name: str
@@ -92,6 +112,8 @@ class TechScoringProfile:
     daily_preference: DailyPreference
     favorites: frozenset[str]
     dislikes: frozenset[str]
+    ineligible_task_ids: frozenset[str] = frozenset()
+    proficiency_pairs: tuple[tuple[str, TaskProficiencyLevel], ...] = ()
 
 
 def tech_scoring_profile_from_entity(tech: Tech) -> TechScoringProfile:
@@ -107,12 +129,16 @@ def tech_scoring_profile_from_entity(tech: Tech) -> TechScoringProfile:
         immutable copies of favorite/dislike sets.
     '''
     # frozenset copies list data so callers cannot mutate lists and affect a frozen profile.
+    ineligible = frozenset(tid for tid, ok in tech.eligible_by_task_id.items() if not ok)
+    prof_tup = tuple(sorted(tech.proficiency_by_task_id.items(), key=lambda x: x[0]))
     return TechScoringProfile(
         tech_name=tech.tech_name,
         tech_id=tech.tech_id,
         daily_preference=tech.daily_preference,
         favorites=frozenset(tech.favorites),
         dislikes=frozenset(tech.dislikes),
+        ineligible_task_ids=ineligible,
+        proficiency_pairs=prof_tup,
     )
 
 
@@ -146,6 +172,8 @@ def tech_scoring_profile_for_schedule_row(
         daily_preference=DailyPreference.CONSISTENCY,
         favorites=frozenset(),
         dislikes=frozenset(),
+        ineligible_task_ids=frozenset(),
+        proficiency_pairs=(),
     )
 
 

@@ -9,7 +9,9 @@ from auto_assign.core.assignment import (
     AssignmentScoringContext,
     DEFAULT_SCORING_WEIGHTS,
     GreedyOptimizationConfig,
+    NoEligibleTechnicianError,
     ScoringWeights,
+    TaskSlotRef,
     assign_greedy,
     assign_tasks,
     compatibility_score,
@@ -20,7 +22,7 @@ from auto_assign.core.assignment import (
 from auto_assign.core.assignment.greedy_assigner import _slot_indices_most_constrained_first
 from auto_assign.domain import Assignment
 from auto_assign.domain.entities import Tech
-from auto_assign.domain.enums import DailyPreference, TimeSlot
+from auto_assign.domain.enums import DailyPreference, TaskProficiencyLevel, TimeSlot
 from auto_assign.ingestion import ScheduleRow, TaskRequest
 
 
@@ -30,6 +32,8 @@ def _tech(
     favorites: list[str] | None = None,
     dislikes: list[str] | None = None,
     preference: DailyPreference = DailyPreference.CONSISTENCY,
+    eligible_by_task_id: dict[str, bool] | None = None,
+    proficiency_by_task_id: dict[str, TaskProficiencyLevel] | None = None,
 ) -> Tech:
     return Tech(
         tech_id=name.lower(),
@@ -37,6 +41,8 @@ def _tech(
         daily_preference=preference,
         favorites=favorites or [],
         dislikes=dislikes or [],
+        eligible_by_task_id=dict(eligible_by_task_id or {}),
+        proficiency_by_task_id=dict(proficiency_by_task_id or {}),
     )
 
 
@@ -54,8 +60,8 @@ def test_compatibility_score_favorite_bonus(work_date: date) -> None:
     profile = tech_scoring_profile_from_entity(_tech('A', favorites=['Scrolls']))
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
     w = ScoringWeights(favorite_bonus=5.0)
-    assert compatibility_score(profile, 'Scrolls', ctx, w) == 5.0
-    assert compatibility_score(profile, 'Other', ctx, w) == 0.0
+    assert compatibility_score(profile, '1', 'Scrolls', ctx, w) == 5.0
+    assert compatibility_score(profile, '2', 'Other', ctx, w) == 0.0
 
 
 def test_compatibility_score_dislike_and_repeat(work_date: date) -> None:
@@ -74,7 +80,7 @@ def test_compatibility_score_dislike_and_repeat(work_date: date) -> None:
         # Isolate repeat term; same row would also increment fairness load otherwise.
         fairness_disliked_load_penalty=0.0,
     )
-    s = compatibility_score(profile, 'Grunge', ctx, w)
+    s = compatibility_score(profile, '1', 'Grunge', ctx, w)
     assert s == -(10.0 + 2.0)
 
 
@@ -85,8 +91,8 @@ def test_compatibility_score_consistency_same_day_other_slot(work_date: date) ->
     confirmed = (Assignment('Same', 'a', work_date, TimeSlot.MID),)
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, confirmed, None)
     w = ScoringWeights(consistency_bonus=4.0)
-    assert compatibility_score(profile, 'Same', ctx, w) == 4.0
-    assert compatibility_score(profile, 'Different', ctx, w) == 0.0
+    assert compatibility_score(profile, '1', 'Same', ctx, w) == 4.0
+    assert compatibility_score(profile, '2', 'Different', ctx, w) == 0.0
 
 
 def test_compatibility_score_variation_bonus(work_date: date) -> None:
@@ -96,8 +102,8 @@ def test_compatibility_score_variation_bonus(work_date: date) -> None:
     confirmed = (Assignment('First', 'a', work_date, TimeSlot.MID),)
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, confirmed, None)
     w = ScoringWeights(variation_bonus=7.0)
-    assert compatibility_score(profile, 'Second', ctx, w) == 7.0
-    assert compatibility_score(profile, 'First', ctx, w) == 0.0
+    assert compatibility_score(profile, '1', 'Second', ctx, w) == 7.0
+    assert compatibility_score(profile, '2', 'First', ctx, w) == 0.0
 
 
 def test_non_disliker_count(work_date: date) -> None:
@@ -213,7 +219,11 @@ def test_slot_indices_most_constrained_first_orders_by_non_dislikers() -> None:
     p1 = tech_scoring_profile_from_entity(_tech('B'))
     p2 = tech_scoring_profile_from_entity(_tech('C'))
     profiles = (p0, p1, p2)
-    task_slots = ['easy', 'hard', 'med']
+    task_slots = [
+        TaskSlotRef('easy', 'easy'),
+        TaskSlotRef('hard', 'hard'),
+        TaskSlotRef('med', 'med'),
+    ]
     assert _slot_indices_most_constrained_first(task_slots, profiles) == [1, 0, 2]
 
 
@@ -251,7 +261,7 @@ def test_compatibility_score_no_history_neutral_task_scores_zero(work_date: date
     '''Empty confirmed rows: no fairness load, no same-day term; neutral task ⇒ 0 with defaults.'''
     profile = tech_scoring_profile_from_entity(_tech('A', dislikes=['X']))
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
-    assert compatibility_score(profile, 'Y', ctx, DEFAULT_SCORING_WEIGHTS) == 0.0
+    assert compatibility_score(profile, '1', 'Y', ctx, DEFAULT_SCORING_WEIGHTS) == 0.0
 
 
 def test_compatibility_score_fairness_disliked_load_only(work_date: date) -> None:
@@ -268,7 +278,7 @@ def test_compatibility_score_fairness_disliked_load_only(work_date: date) -> Non
         consistency_bonus=0.0,
         variation_bonus=0.0,
     )
-    assert compatibility_score(profile, 'Neutral', ctx, w) == -4.0
+    assert compatibility_score(profile, '1', 'Neutral', ctx, w) == -4.0
 
 
 def test_lookahead_tie_break_preserves_future_options(work_date: date) -> None:
@@ -395,4 +405,49 @@ def test_neutral_profile_when_name_missing_from_map(work_date: date) -> None:
     assert prof.favorites == frozenset()
     assert prof.dislikes == frozenset()
     ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
-    assert compatibility_score(prof, 'Anything', ctx, DEFAULT_SCORING_WEIGHTS) == 0.0
+    assert compatibility_score(prof, '1', 'Anything', ctx, DEFAULT_SCORING_WEIGHTS) == 0.0
+
+
+def test_assign_greedy_raises_when_no_one_eligible(work_date: date) -> None:
+    a = _row('A', work_date)
+    b = _row('B', work_date)
+    profiles = {
+        'A': _tech('A', eligible_by_task_id={'1': False}),
+        'B': _tech('B', eligible_by_task_id={'1': False}),
+    }
+    reqs = [
+        TaskRequest('1', 'Solo', 1, work_date, TimeSlot.AM),
+        TaskRequest('2', 'Other', 1, work_date, TimeSlot.AM),
+    ]
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    with pytest.raises(NoEligibleTechnicianError):
+        assign_greedy(
+            reqs,
+            [a, b],
+            scoring_context=ctx,
+            tech_profiles_by_name=profiles,
+            optimization=GreedyOptimizationConfig(
+                lookahead_tie_breaks=False,
+                local_search_post_pass=False,
+                exact_fallback_max_pool_size=None,
+            ),
+            rng=random.Random(0),
+        )
+
+
+def test_compatibility_score_proficiency_expert_bonus(work_date: date) -> None:
+    profile = tech_scoring_profile_from_entity(
+        _tech('A', proficiency_by_task_id={'tid': TaskProficiencyLevel.EXPERT})
+    )
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    w = DEFAULT_SCORING_WEIGHTS
+    assert compatibility_score(profile, 'tid', 'Anyname', ctx, w) == 1.0
+
+
+def test_compatibility_score_ineligible_is_neg_inf(work_date: date) -> None:
+    profile = tech_scoring_profile_from_entity(
+        _tech('A', eligible_by_task_id={'tid': False}, favorites=['Anyname'])
+    )
+    ctx = AssignmentScoringContext(work_date, TimeSlot.AM, (), None)
+    w = ScoringWeights(favorite_bonus=99.0)
+    assert compatibility_score(profile, 'tid', 'Anyname', ctx, w) == float('-inf')

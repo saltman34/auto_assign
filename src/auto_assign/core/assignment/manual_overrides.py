@@ -14,6 +14,62 @@ from auto_assign.domain.validators.primitives import normalize_string, normalize
 from auto_assign.ingestion import ScheduleRow, TaskRequest
 
 
+def is_tech_eligible_for_catalog_task(tech: Tech, catalog_task_id: str | None) -> bool:
+    '''
+    True unless the technician has an **explicit** ineligibility entry for this catalog task.
+
+    Absent keys are treated as eligible (matches scoring-layer contract: missing =
+    allowed). Passing ``catalog_task_id=None`` also returns True because catalog-keyed
+    eligibility cannot be evaluated without a catalog id.
+    '''
+    if catalog_task_id is None:
+        return True
+    key = catalog_task_id.strip()
+    if not key:
+        return True
+    return tech.eligible_by_task_id.get(key, True) is not False
+
+
+@dataclass(frozen=True)
+class IneligibleOverrideInfo:
+    '''Identifies a manual assignment whose tech is explicitly ineligible for the task.'''
+
+    task_name: str
+    catalog_task_id: str | None
+    technician_id: str
+
+
+def classify_ineligible_manual_assignments(
+    manual_assignments: Sequence[Assignment],
+    tech_profiles_by_name: Mapping[str, Tech] | None,
+) -> tuple[IneligibleOverrideInfo, ...]:
+    '''
+    Return info for manual assignments that place a tech the catalog says is ineligible.
+
+    ``tech_profiles_by_name`` is keyed by **normalized tech name**; the manual
+    ``Assignment.technician_id`` is a ``tech_id``, so we build a tech_id→Tech index
+    once. Unknown tech_ids (no matching profile) are skipped — separate validation
+    (``technician_ids_missing_from_db``) already surfaces those.
+    '''
+    if not manual_assignments or not tech_profiles_by_name:
+        return ()
+    tech_by_id: dict[str, Tech] = {t.tech_id: t for t in tech_profiles_by_name.values()}
+    out: list[IneligibleOverrideInfo] = []
+    for a in manual_assignments:
+        tech = tech_by_id.get(a.technician_id)
+        if tech is None:
+            continue
+        if not is_tech_eligible_for_catalog_task(tech, a.catalog_task_id):
+            out.append(
+                IneligibleOverrideInfo(
+                    task_name=a.task_name,
+                    catalog_task_id=a.catalog_task_id,
+                    technician_id=a.technician_id,
+                )
+            )
+    return tuple(out)
+
+
 def _tech_id_for_schedule_row(
     row: ScheduleRow,
     tech_profiles_by_name: Mapping[str, Tech] | None,
@@ -67,6 +123,7 @@ class ResidualPlan:
     residual_requests: list[TaskRequest]
     residual_pool: list[ScheduleRow]
     errors: list[str]
+    ineligible_overrides: tuple[IneligibleOverrideInfo, ...] = ()
 
 
 def build_residual_plan_after_manual_assignments(
@@ -78,6 +135,11 @@ def build_residual_plan_after_manual_assignments(
 ) -> ResidualPlan:
     '''
     Compute greedy residual workload/pool after fixed manual assignments.
+
+    Manual assignments that carry ``eligibility_overridden=True`` (or that the catalog
+    still flags as ineligible) are **allowed** by design — they represent an explicit
+    operator decision (e.g. training / shadowing). They are reported via
+    ``ResidualPlan.ineligible_overrides`` for UI banners but never added to ``errors``.
     '''
     errors: list[str] = []
     manual_by_tid: dict[str, Assignment] = {}
@@ -133,4 +195,7 @@ def build_residual_plan_after_manual_assignments(
         residual_requests=residual_requests,
         residual_pool=residual_pool,
         errors=errors,
+        ineligible_overrides=classify_ineligible_manual_assignments(
+            manual_assignments, tech_profiles_by_name
+        ),
     )

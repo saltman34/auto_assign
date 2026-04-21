@@ -1,10 +1,18 @@
 from .assignment_service import assign_tasks
-from .compatibility_scoring import compatibility_score, non_disliker_count, task_is_disliked
+from .compatibility_scoring import (
+    NoEligibleTechnicianError,
+    compatibility_score,
+    eligible_non_disliker_count,
+    is_eligible_for_task,
+    non_disliker_count,
+    task_is_disliked,
+)
 from .greedy_assigner import assign_greedy
 from .scoring_types import (
     AssignmentScoringContext,
     GreedyOptimizationConfig,
     ScoringWeights,
+    TaskSlotRef,
     TechScoringProfile,
     build_pool_scoring_profiles,
     tech_scoring_profile_for_schedule_row,
@@ -26,13 +34,17 @@ from .simulation import (
 __all__ = [
     'assign_tasks',
     'assign_greedy',
+    'NoEligibleTechnicianError',
     'compatibility_score',
+    'eligible_non_disliker_count',
+    'is_eligible_for_task',
     'non_disliker_count',
     'task_is_disliked',
     'AssignmentScoringContext',
     'GreedyOptimizationConfig',
     'DEFAULT_SCORING_WEIGHTS',
     'ScoringWeights',
+    'TaskSlotRef',
     'TechScoringProfile',
     'build_pool_scoring_profiles',
     'tech_scoring_profile_for_schedule_row',

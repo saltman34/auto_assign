@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 '''
-CLI for greedy scoring benchmarks. Run from repo root:
+CLI for greedy scoring benchmarks (synthetic scenarios; no DB). Run from repo root:
 
-    python scripts/run_greedy_simulation.py --mode paired
+    python scripts/run_greedy_simulation.py --mode paired   # default: baseline vs improved
+    python scripts/run_greedy_simulation.py --mode sanity   # current defaults only (quick check)
 
 No PYTHONPATH needed: this prepends ``<repo>/src`` for imports.
+
+See the root README section *Greedy scoring benchmarks (offline CLI)* and
+``docs/greedy_scoring_policy_and_simulation.md`` for what each mode is for.
 '''
 from __future__ import annotations
 

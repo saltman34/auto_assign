@@ -24,6 +24,7 @@ from .compatibility_scoring import compatibility_score
 from .scoring_types import (
     AssignmentScoringContext,
     GreedyOptimizationConfig,
+    TaskSlotRef,
     TechScoringProfile,
     tech_scoring_profile_from_entity,
 )
@@ -278,10 +279,11 @@ def _build_confirmed_history(
     return tuple(rows)
 
 
-def _expand_task_slots(task_requests: list[TaskRequest]) -> list[str]:
-    slots: list[str] = []
+def _expand_task_slots(task_requests: list[TaskRequest]) -> list[TaskSlotRef]:
+    slots: list[TaskSlotRef] = []
     for tr in task_requests:
-        slots.extend([tr.task_name] * tr.task_count)
+        for _ in range(tr.task_count):
+            slots.append(TaskSlotRef(catalog_task_id=tr.task_id, task_name=tr.task_name))
     return slots
 
 
@@ -291,15 +293,16 @@ def _tech_profiles_by_id(profiles_by_name: dict[str, Tech]) -> dict[str, TechSco
 
 def _score_total_for_permutation(
     *,
-    task_slots: list[str],
+    task_slots: list[TaskSlotRef],
     tech_order: list[Tech],
     ctx: AssignmentScoringContext,
 ) -> float:
     total = 0.0
-    for task_name, tech in zip(task_slots, tech_order, strict=True):
+    for slot, tech in zip(task_slots, tech_order, strict=True):
         total += compatibility_score(
             tech_scoring_profile_from_entity(tech),
-            task_name,
+            slot.catalog_task_id,
+            slot.task_name,
             ctx,
             DEFAULT_SCORING_WEIGHTS,
         )
@@ -363,7 +366,13 @@ def _evaluate_policy(
     disliked = 0
     for assignment in assignments:
         p = profiles_by_id[assignment.technician_id]
-        score_total += compatibility_score(p, assignment.task_name, ctx, DEFAULT_SCORING_WEIGHTS)
+        score_total += compatibility_score(
+            p,
+            assignment.effective_catalog_task_id(),
+            assignment.task_name,
+            ctx,
+            DEFAULT_SCORING_WEIGHTS,
+        )
         if assignment.task_name in p.favorites:
             fav += 1
         elif assignment.task_name in p.dislikes:

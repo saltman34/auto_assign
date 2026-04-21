@@ -12,13 +12,18 @@ from collections.abc import Sequence
 from auto_assign.domain import Assignment
 from auto_assign.ingestion import ScheduleRow
 
-from .compatibility_scoring import compatibility_score, task_is_disliked
-from .scoring_types import AssignmentScoringContext, ScoringWeights, TechScoringProfile
+from .compatibility_scoring import NoEligibleTechnicianError, compatibility_score, task_is_disliked
+from .scoring_types import (
+    AssignmentScoringContext,
+    ScoringWeights,
+    TaskSlotRef,
+    TechScoringProfile,
+)
 
 
 def assign_exact_small_pool(
     *,
-    ordered_task_slots: Sequence[str],
+    ordered_task_slots: Sequence[TaskSlotRef],
     pool: Sequence[tuple[ScheduleRow, TechScoringProfile]],
     scoring_context: AssignmentScoringContext,
     weights: ScoringWeights,
@@ -29,6 +34,9 @@ def assign_exact_small_pool(
 
     ``pool`` and ``ordered_task_slots`` must have the same length N; runtime is
     O(N * N!) in the bitmask formulation—only suitable for small N (e.g. <= 9).
+
+    Raises:
+        NoEligibleTechnicianError: If some slot has no eligible technician in the pool.
     '''
     n_slots = len(ordered_task_slots)
     if n_slots == 0:
@@ -38,13 +46,24 @@ def assign_exact_small_pool(
 
     scores = [
         [
-            compatibility_score(profile, ordered_task_slots[slot_i], scoring_context, weights)
+            compatibility_score(
+                profile,
+                ordered_task_slots[slot_i].catalog_task_id,
+                ordered_task_slots[slot_i].task_name,
+                scoring_context,
+                weights,
+            )
             for _, profile in pool
         ]
         for slot_i in range(n_slots)
     ]
+    for slot_i in range(n_slots):
+        if max(scores[slot_i]) == float('-inf'):
+            slot = ordered_task_slots[slot_i]
+            raise NoEligibleTechnicianError(slot.catalog_task_id, slot.task_name)
+
     disliked = [
-        [task_is_disliked(profile, ordered_task_slots[slot_i]) for _, profile in pool]
+        [task_is_disliked(profile, ordered_task_slots[slot_i].task_name) for _, profile in pool]
         for slot_i in range(n_slots)
     ]
 
@@ -84,9 +103,11 @@ def assign_exact_small_pool(
     out: list[Assignment] = []
     for slot_i, tech_i in enumerate(tech_order):
         row, profile = pool[tech_i]
+        slot = ordered_task_slots[slot_i]
         out.append(
             Assignment(
-                task_name=ordered_task_slots[slot_i],
+                task_name=slot.task_name,
+                catalog_task_id=slot.catalog_task_id,
                 technician_id=profile.tech_id,
                 date_assigned=row.work_date,
                 time_slot=time_slot,
