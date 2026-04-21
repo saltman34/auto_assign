@@ -4,6 +4,11 @@ Revision ID: e8b7c2d1f4a9
 Revises: 7d8e9f10a1b2
 Create Date: 2026-04-09
 
+Creates the ``tasks`` catalog table. Task rows are managed by the demo seeder
+(``auto_assign.demo.seed``) or real operator input — not by migrations — so this
+migration intentionally inserts no rows. A follow-up migration
+(``a1c2b3d4e5f6``) cleans up legacy seed rows left behind by earlier revisions
+of this file.
 """
 from typing import Sequence, Union
 
@@ -25,19 +30,6 @@ def upgrade() -> None:
         sa.Column('default_count', sa.Integer(), nullable=False, server_default='0'),
         sa.PrimaryKeyConstraint('task_id'),
         sa.UniqueConstraint('task_name', name='uq_tasks_task_name'),
-    )
-    op.execute(
-        sa.text(
-            """
-            INSERT INTO tasks (task_id, task_name, default_count) VALUES
-            ('1', 'Clinicals', 0),
-            ('2', 'Recuts', 0),
-            ('3', 'Scrolls', 0),
-            ('4', 'Embedding', 0),
-            ('5', 'Exhaust Checks', 0),
-            ('6', 'Grossing', 0)
-            """
-        )
     )
 
 
