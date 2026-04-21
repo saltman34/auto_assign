@@ -44,7 +44,7 @@ Step-by-step onboarding and troubleshooting: **[`docs/operator_runbook.md`](docs
 | Area | Purpose |
 |------|---------|
 | **Home** | Upload schedule CSV, pick date and shift (AM / MID / PM), set task headcounts, optional manual rows, **Generate** draft, **Publish** (confirm) or discard. |
-| **Technician Profiles** | CSV import or form; stable `tech_id`, display `tech_name` (must match schedule CSV names). |
+| **Technician Profiles** | CSV import or form; stable `tech_id`, display `tech_name` (must match schedule CSV names); per-task **eligibility** (hard gate) and **proficiency** on the form ([`docs/proficiency_rubric.md`](docs/proficiency_rubric.md)). |
 | **Task Catalog** | Persisted tasks and default headcounts for the engine. |
 | **Assignment history** | Published (confirmed) assignments; audit / export. |
 | **About this app** | In-app overview of behavior. |
@@ -68,19 +68,33 @@ Sample CSV shapes: `data/sample_schedule.csv`, `data/sample_tech_profiles.csv`. 
 
 ## Documentation
 
+Start at [`docs/README.md`](docs/README.md) — it groups docs by audience (stranger / operator / contributor / evaluator) and lists every file with a one-line purpose.
+
 | Document | Contents |
 |----------|----------|
+| [`docs/README.md`](docs/README.md) | **Index**: audience-based map of every doc in this folder. |
 | [`docs/operator_runbook.md`](docs/operator_runbook.md) | Install → migrate → first publish; troubleshooting table. |
-| [`docs/csv_contract.md`](docs/csv_contract.md) | Schedule and tech CSV columns, enums, exports. |
-| [`docs/assignment_algorithm.md`](docs/assignment_algorithm.md) | Greedy procedure, scoring terms, draft vs confirmed slices. |
-| [`docs/persistence_database.md`](docs/persistence_database.md) | Tables, indexes, overrides. |
-| [`docs/assignment_persistence_feature_summary.md`](docs/assignment_persistence_feature_summary.md) | UI ↔ services ↔ DB implementation summary. |
-| [`docs/technician_profiles_ingestion.md`](docs/technician_profiles_ingestion.md) | CSV vs form, uniqueness, name alignment. |
-| [`docs/greedy_scoring_policy_and_simulation.md`](docs/greedy_scoring_policy_and_simulation.md) | Default `GreedyOptimizationConfig`, running simulations. |
-| [`docs/greedy_scoring_paired_benchmark_report.md`](docs/greedy_scoring_paired_benchmark_report.md) | Fixed-scenario benchmark numbers. |
-| [`docs/examples/sample_task_list.yaml`](docs/examples/sample_task_list.yaml) | Illustrative task list only (app uses DB Task Catalog). |
+| [`docs/csv_contract.md`](docs/csv_contract.md) | Reference: schedule and tech CSV columns, enums, exports. |
+| [`docs/assignment_algorithm.md`](docs/assignment_algorithm.md) | Greedy procedure, scoring terms, tie handling (concept). |
+| [`docs/proficiency_rubric.md`](docs/proficiency_rubric.md) | Manager rubric for per-task eligibility and proficiency ordinals. |
+| [`docs/persistence_database.md`](docs/persistence_database.md) | Draft/confirmed concept, tables, indexes, overrides. |
+| [`docs/architecture_overview.md`](docs/architecture_overview.md) | End-to-end narrative tying algorithm → schema → UI, with system diagram. |
+| [`docs/technician_profiles_ingestion.md`](docs/technician_profiles_ingestion.md) | Profile lifecycle: CSV vs form, uniqueness, name alignment. |
+| [`docs/greedy_scoring_policy_and_simulation.md`](docs/greedy_scoring_policy_and_simulation.md) | **Living** guide: default greedy policy flags, fairness lookback, how to run benchmarks (see section below). |
+| [`docs/greedy_scoring_paired_benchmark_report.md`](docs/greedy_scoring_paired_benchmark_report.md) | **Snapshot** of one paired benchmark run (full table + narrative); optional read unless you want dated evidence in-repo. |
+| [`docs/seed_demo_data.md`](docs/seed_demo_data.md) | One-click "Load demo data" path: 18 technicians, a 6-task catalog, and 14 days of confirmed history for the fastest route to a working draft. |
 | [`alembic/README`](alembic/README) | Common Alembic commands. |
 | [`.env.example`](.env.example) | Environment variable template (no secrets). |
+
+### Greedy scoring benchmarks (offline CLI)
+
+These are **not** the Streamlit app: they use **synthetic** crews and tasks from `simulation.py` to stress the assigner and print tables to the terminal (no Postgres).
+
+| Artifact | What it is for |
+|----------|----------------|
+| [`scripts/run_greedy_simulation.py`](scripts/run_greedy_simulation.py) | **How you reproduce numbers.** `--mode paired` (**default**): same random scenarios run twice—once with a deliberately minimal baseline policy, once with **current production defaults**—so score/optimality deltas are apples-to-apples. `--mode sanity`: runs **only** the current defaults (simpler table, less work); use for a quick smoke check. Optional: `--scenario-count`, `--seed`, `--fairness-lookback-days`. |
+| [`docs/greedy_scoring_policy_and_simulation.md`](docs/greedy_scoring_policy_and_simulation.md) | **What the defaults mean**, why fairness lookback is 14 days, summary deltas, and the same CLI examples—read this before the frozen report. |
+| [`docs/greedy_scoring_paired_benchmark_report.md`](docs/greedy_scoring_paired_benchmark_report.md) | A **dated paste** of one `paired` run (per-scenario table + interpretation). It can go **stale** if you change `ScoringWeights`, `GreedyOptimizationConfig`, or scenario generation—re-run the script and update this file if you rely on it for PRs or hiring collateral. |
 
 ---
 

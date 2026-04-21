@@ -1,6 +1,44 @@
 # Persistence and database design (scoring + scheduling)
 
-This document complements [`assignment_algorithm.md`](assignment_algorithm.md) **§1 Persistence model**. It describes how to back the greedy scorer with a database, which tables you need at minimum, and what is optional as the product grows.
+How assignments are stored in Postgres. Each shift goes through a two-stage lifecycle — an editable **draft** that can be regenerated freely, and a **confirmed** slice that becomes the historical record used by fairness scoring — and this doc covers the full schema (tables, indexes, and the optional override/audit tables) that makes that split work.
+
+---
+
+## 0. Persistence concept: draft vs confirmed, one slice at a time
+
+The scorer and the UI share one invariant: **assignments live in one table with a `status` column**, and every write happens within a single `(work_date, time_slot)` **slice**.
+
+### 0.1 Two logical stores the scorer reads
+
+| Store | Role |
+|--------|------|
+| **Technicians** | Stable profile: `tech_id`, display name, daily preference (consistency / variation), favorite/disliked **task names**, plus per–catalog-task **eligibility** (hard gate) and **proficiency** (ordinal bonus). See [`proficiency_rubric.md`](proficiency_rubric.md). |
+| **Assignments** | Rows that tie **who** was assigned **what**, **when**, and in **which shift** (`date`, `time_slot`, display task label, optional `catalog_task_id`, `tech_id`). |
+
+The scorer reads **tech** profiles for bonuses/penalties. It reads **assignment rows** for same-day consistency/variation, recency on dislikes, and **global fairness**—using only rows that count as **confirmed** (see §0.3).
+
+### 0.2 Scope: one generation per `work_date` + `time_slot`
+
+Every generate/publish action is scoped to **exactly one** calendar date and **one** shift band (AM / MID / PM). There is **no** batch “whole week” or “all slots today” generation in this iteration; other dates and slots are never modified by a given run.
+
+### 0.3 One assignments table + `status` column (chosen design)
+
+Each assignment row has a **`status`** that distinguishes **draft** from **confirmed**.
+
+| Action | Behavior |
+|--------|----------|
+| **Generate** / **Regenerate schedule** | For the current `(work_date, time_slot)` scope: **delete** existing **`draft`** rows for that pair, then **insert** the new greedy result as **`draft`**. Rows for other `(work_date, time_slot)` pairs are unchanged. **Confirmed** rows for this scope are not touched by regenerate (until confirm replaces them—see below). |
+| **Confirm schedule** | For that same `(work_date, time_slot)`: in **one transaction**, **delete** all **`draft` and `confirmed`** rows for that pair, then **insert** the chosen assignment set as **`confirmed`** (atomic whole-slice replace). UI warns only before confirm if confirmed rows already exist. |
+
+**Fairness and scoring** queries filter **`status = confirmed`** only. **Draft** rows are scratch space: regenerating must **not** inflate penalties or history as if people had already worked those tasks.
+
+**Summary:** Overwrite-in-place is applied **within** the table by scope `(work_date, time_slot)` and **status**: regenerate replaces **draft**; confirm promotes that slice to **confirmed** and overwrites the previous confirmed slice for that pair. There are **no** separate draft vs confirmed tables.
+
+### 0.4 What to store per assignment row (minimum)
+
+- `tech_id`, `task_id` (or normalized task name key), `work_date`, `time_slot`, **`status`**.
+- Distinguish multiple headcount slots for the same task if needed (e.g. `slot_index`).
+- Optional: `created_at`, `confirmed_at`, `updated_at` for audit UI.
 
 ---
 
@@ -11,7 +49,6 @@ This document complements [`assignment_algorithm.md`](assignment_algorithm.md) *
 | **SQLAlchemy** | ORM models = **tables**, relationships, migrations (Alembic). This is the **source of truth** for stored data. |
 | **Pydantic** | **Schemas** for boundaries: CSV import rows, API request/response bodies, and explicit validation before you build domain `Tech` / `Assignment` objects. Optional: small mappers `orm_instance → domain` and `domain → orm`. |
 
-You do **not** need a separate database table for **`TechScoringProfile`**. It remains an in-memory view built when you load a `Tech` (or join technician + favorites/dislikes) for `compatibility_score`.
 
 ---
 
@@ -30,7 +67,9 @@ You do **not** need a separate database table for **`TechScoringProfile`**. It r
 | `daily_preference` | Enum: consistency / variation. |
 | `staff_status` | If you use it for eligibility (see domain `Tech`). |
 | `available_am`, `available_mid`, `available_pm` | Or equivalent; mirrors current `Tech` if scheduling still depends on them. |
-| `favorites` / `dislikes` | Either **JSON arrays** of normalized task names, or **junction tables** `technician_favorites(technician_id, task_id)` / `technician_dislikes(...)` (see §4). |
+| `favorites` / `dislikes` | **JSON arrays** of normalized task **names** (same convention as domain `Tech`). |
+| `eligible_by_task_id` | JSON object: catalog **`tasks.task_id`** → `false` to hard-exclude; absent keys = eligible. |
+| `proficiency_by_task_id` | JSON object: catalog **`tasks.task_id`** → proficiency enum value string (`novice`, `independent`, `strong`, `expert`). Absent keys = independent (no proficiency bonus). |
 
 **CSV → DB:** One import job validates each row (Pydantic or domain `Tech`), upserts by `tech_id`, then the app reads technicians when building `tech_profiles_by_name` for `assign_tasks`.
 
@@ -50,9 +89,11 @@ For **CSV vs form**, **uniqueness**, and a **hardening checklist**, see [`techni
 | `technician_id` | FK → `technicians.tech_id` (or same string key if you defer FK). |
 | `work_date` | `DATE`. |
 | `time_slot` | Enum/string: AM / MID / PM. |
-| `task_name` or `task_id` | Normalized task label; prefer **`task_id` FK** if you add a `tasks` table (§3). |
+| `task_id` (ORM column) | Normalized **display** task label for UI and favorites alignment (legacy name in code: `AssignmentRecord.task_id`). |
+| `catalog_task_id` | Optional catalog **`tasks.task_id`** for eligibility/proficiency scoring; null on older rows (scoring falls back to display label). |
 | `status` | `draft` \| `confirmed`. |
 | `slot_index` | Optional but useful when two rows are “same task, two heads” for one `(date, slot)`—disambiguates without composite uniqueness hacks. |
+| `eligibility_overridden` | Boolean (default `false`). True only for manual pre-assignments where the operator explicitly placed a tech the catalog flags as ineligible (training / shadowing). Greedy-produced rows are always `false`. Carried through draft → confirmed so the audit badge survives round-trips. |
 | `created_at`, `updated_at`, `confirmed_at` | Optional audit fields. |
 
 **Scoring rule (from algorithm doc):** Queries that feed **`AssignmentScoringContext.confirmed_assignments`** must filter **`status = confirmed`** only. Draft rows must not affect fairness, repeat-dislike, or cross-slot consistency.
@@ -90,8 +131,11 @@ The Assignment Engine now persists day-of override edits in a dedicated table.
 | `technician_id` | FK to `technicians.tech_id`. |
 | `task_name` | Set only for `manual_assignment`. |
 | `status` | `draft` during planning, promoted to `confirmed` at publish for audit retention. |
+| `eligibility_overridden` | Boolean (default `false`). Set to `true` on a `manual_assignment` row when the operator explicitly placed a tech whose `eligible_by_task_id[catalog_task_id]` is `false`. Always `false` for `call_off` / `overtime` rows. |
 
 Draft overrides reload with the slice and are cleared or promoted by publish/discard workflows.
+
+**Eligibility-override flow (Step 6, manual assignments):** the UI evaluates `eligible_by_task_id` on Add; ineligible pairs trigger a two-stage confirmation (warning banner + **Override eligibility** / **Cancel**). Confirmed overrides persist the flag on both `assignments.eligibility_overridden` and `assignment_overrides.eligibility_overridden` so the audit trail survives publish and the local-swap post-pass pins overridden techs (see [`assignment_algorithm.md`](assignment_algorithm.md) §2.3).
 
 ---
 
@@ -104,9 +148,10 @@ Draft overrides reload with the slice and are cleared or promoted by publish/dis
 | **Import staging / audit** | When you must trace each CSV batch (filename, imported_at, row-level errors). |
 | **Profile history** | When you need time-travel (“score using prefs as of date X”)—usually overkill initially. |
 
+
 ---
 
-## 6. Are you missing anything for scoring?
+## 6. Necessary items for scoring
 
 For **this** scoring mechanism and `assignment_algorithm.md`:
 
@@ -127,26 +172,14 @@ You do **not** need a separate table for **score weights**; defaults live in cod
 | Domain / scoring type | DB source |
 |------------------------|-----------|
 | `Tech` | Row(s) from `technicians` (+ favorites/dislikes). |
-| `TechScoringProfile` | Built in memory from `Tech` (or directly from ORM + normalization). |
+| `TechScoringProfile` | Not persisted. Built in memory from `Tech` (or directly from ORM + normalization). |
 | `Assignment` (for `confirmed_assignments`) | Rows from `assignments` where `status = confirmed`, mapped to domain `Assignment` (`task_name`, `technician_id`, `date_assigned`, `time_slot`). |
 
 ---
 
-## 8. Operator runbook (current app)
+## 8. Operator runbook
 
-The Streamlit app under [`app.py`](../app.py) delegates UI to [`src/auto_assign/ui/`](../src/auto_assign/ui/). Persistence and greedy scoring are wired as follows.
-
-1. **Install:** `uv sync` (from repo root).  
-2. **Database URL:** Set `DATABASE_URL` or `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` in `.env`. Use **`postgresql+psycopg://...`** for psycopg v3, or a bare `postgresql://` URL (the app normalizes it to `+psycopg` when needed).  
-3. **Migrate:** `uv run alembic upgrade head`.  
-4. **Technicians:** In the app, expand **Technician profiles** and import the tech CSV (or use the form) so every schedule name maps to a **`tech_id`** row. Unmapped names produce synthetic ids that **will not confirm** until profiles exist (FK).  
-5. **Schedule:** Upload the schedule CSV, pick date and slot, set task counts, optionally open **Scoring options** (random seed, fairness lookback or unlimited history).  
-6. **Overrides (optional):** In Assignment Engine, apply day-wide call-off edits, shift-specific overtime edits, and manual pre-assignments before generate. These save as **draft** override rows.  
-7. **Generate:** Writes **draft** assignment rows for `(work_date, time_slot)` and refreshes from DB on reload (with draft overrides).  
-8. **Confirm:** Replaces **draft + confirmed** assignments for that slice and promotes related draft override rows to **confirmed** audit rows.
-
-**Current state:** `tasks` is persisted and used by the UI for task maintenance and validation.  
-**Future optional step:** add FK-level referential integrity between assignment rows and catalog ids.
+Operator steps (install → migrate → publish → troubleshoot) live in a single place: [`operator_runbook.md`](operator_runbook.md). This doc intentionally does not duplicate them.
 
 ---
 

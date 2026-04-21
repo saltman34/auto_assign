@@ -1,5 +1,7 @@
 # Greedy Scoring Policy and Simulation Guide
 
+How the scoring algorithm is tuned: the handful of knobs that balance fairness against preference and proficiency, why the fairness lookback window is set where it is, and how to run offline simulations on synthetic schedules (no database required) to evaluate changes before shipping them.
+
 Date: 2026-04-09
 
 ## Default Policy (Current)
@@ -10,6 +12,8 @@ The app now defaults to the improved greedy policy everywhere assignments are ge
 - lookahead tie-breaks: **ON**
 - exact fallback for small pools: **ON** (`pool <= 9`)
 - strict dislike avoidance: **ON**
+
+`ScoringWeights` also includes **proficiency** bonuses (`proficiency_novice_bonus` … `proficiency_expert_bonus`, default strong/expert small positives; novice/independent default to 0). Changing those coefficients will shift simulation totals and paired benchmarks—re-run `scripts/run_greedy_simulation.py` after tuning.
 
 Backend source of truth is `GreedyOptimizationConfig` in `src/auto_assign/core/assignment/scoring_types.py`.
 The Assignment Engine passes `greedy_optimization=None` so these defaults always apply; operators do not see scoring toggles on Home. Fairness lookback for scoring and history loading is fixed at **14 days** in `src/auto_assign/ui/schedule/workflow.py`.

@@ -1,8 +1,6 @@
 # CSV and data contracts
 
-Single reference for **file formats** the app parses or exports. Implementation: `src/auto_assign/core/csv_parsing/`, `parse_tech_profiles.py`, `ingestion/csv_schema.py`.
-
-For **how profiles land in the database** and uniqueness rules, see [technician_profiles_ingestion.md](technician_profiles_ingestion.md).
+Reference for every CSV file the app reads or writes: the required columns, the allowed values for each enum field, and the shape of each export. Lifecycle and uniqueness rules (how rows become stored profiles, how duplicates are prevented) live in the ingestion and persistence docs rather than here.
 
 ---
 
@@ -44,6 +42,8 @@ For a chosen **date** and **time slot**:
 
 **Purpose:** Upsert technicians: stable `tech_id`, display `tech_name`, preferences.
 
+**Eligibility / proficiency:** Per-catalog-task maps are edited in the Streamlit **Add or Edit Profile** tab (not yet in the CSV schema). Bulk CSV continues to cover favorites/dislikes only; see [proficiency_rubric.md](proficiency_rubric.md).
+
 ### Required columns
 
 | Column | Notes |
@@ -65,9 +65,7 @@ Row errors report **spreadsheet row** numbers (header = row 1).
 
 ## 3. Task catalog (not a CSV contract)
 
-Assignable tasks and default headcounts live in the **`tasks`** table, edited in the **Task Catalog** UI (`task_repository.py`). Technician favorites/dislikes are validated against **catalog task names**.
-
-Illustrative YAML (not loaded by the app): [examples/sample_task_list.yaml](examples/sample_task_list.yaml).
+Assignable tasks and default headcounts live in the **`tasks`** table, edited in the **Task Catalog** UI (`task_repository.py`). Technician favorites/dislikes are validated against **catalog task names**. The schema (columns, FK relationships) is documented in [`persistence_database.md`](persistence_database.md).
 
 ---
 
@@ -97,5 +95,9 @@ Confirmed rows use dict keys from `assignment_repository.load_confirmed_assignme
 
 Repository examples under `data/`:
 
-- `sample_schedule.csv` — schedule shape.  
-- `sample_tech_profiles.csv` — tech shape; **favorites/dislikes** use task names that must exist in your **Task Catalog** after seeding.
+- `sample_schedule.csv` — 18 technicians × 21 consecutive days of availability; shape matches §1 and parses cleanly with `parse_schedule`.
+- `sample_tech_profiles.csv` — 12 profiles covering every column in §2. Favorites / dislikes reference task names (Clinicals, Recuts, Scrolls, Embedding, Grossing, Exhaust Checks) that must exist in your **Task Catalog** at import time.
+
+These are **test fixtures** — useful for exercising the CSV import path but incomplete on their own, because eligibility and proficiency live in the database and cannot be carried in the current CSV schema. For a fully-populated demo database (including eligibility and proficiency) in one click, see [`seed_demo_data.md`](seed_demo_data.md).
+
+Both files are regenerated from code via `python scripts/seed_demo_data.py regenerate-csvs`, so they stay in sync with the in-app demo seeder.

@@ -1,22 +1,25 @@
-# Assignment, scoring, and persistence — implementation summary
+# Architecture overview — algorithm, persistence, and UI end-to-end
 
-This document summarizes what was built to connect **greedy compatibility scoring**, **domain assignments**, and **Postgres persistence** (draft + confirmed slices), and how the **Streamlit UI** is organized. It complements [`assignment_algorithm.md`](assignment_algorithm.md) (behavior) and [`persistence_database.md`](persistence_database.md) (schema + operator runbook).
-
----
-
-## 1. Goals
-
-- **Single identifier for “who” on an assignment:** Domain `Assignment.technician_id` and `assignments.technician_id` are **`tech_id`** (FK → `technicians.tech_id`), not display names. Schedule CSVs still use **`tech_name`**; the app resolves name → `Tech` → `tech_id` for scoring and storage.
-- **Scoring uses published history only:** `confirmed_assignments` passed into greedy scoring come from DB rows with **`status = confirmed`** only; drafts do not affect fairness or same-day terms.
-- **Slice-based persistence:** For each `(work_date, time_slot)`, **draft** rows are replaced on generate; **confirm** atomically removes **draft + confirmed** for that slice and inserts **confirmed** rows.
-- **Manual override audit:** Day-level call-off/overtime edits and slice-level manual pre-assignments are persisted as draft overrides and promoted to confirmed rows on publish.
-- **Deterministic ordering:** `slot_index` (0..n−1) on each row, assigned from a stable sort on `(task_name, technician_id)` when writing a slice.
-- **Safe confirms:** Unknown `tech_id`s (e.g. unmapped schedule names using a synthetic id) are **blocked** from persisting or confirming with a clear error listing missing ids.
-- **Resilient UI:** If the database holds a draft for the selected date/slot, the UI **reloads** that draft into session state so refresh or a new browser session still shows the same draft.
+Walkthrough of how the whole app fits together, from the scoring algorithm down through the domain types, the database layer, and the Streamlit UI. Includes a system diagram and a file-level map of which code lives where so you can orient yourself before diving into any one piece.
 
 ---
 
-## 2. Architecture (high level)
+## 1. What this doc covers
+
+This file is the **integration** view. It assumes you have already met the scorer and the schema in their own docs; here we show how the pieces fit and which file owns what. If you’re new to the project, read the root [`README.md`](../README.md) and [`assignment_algorithm.md`](assignment_algorithm.md) first.
+
+Core invariants enforced across layers:
+
+- **One identifier for “who”:** domain `Assignment.technician_id` and DB `assignments.technician_id` are both **`tech_id`** (FK → `technicians.tech_id`). Schedule CSVs still carry **`tech_name`**; the app resolves name → `Tech` → `tech_id` before scoring or persisting.
+- **Scoring uses published history only:** `confirmed_assignments` comes from DB rows with `status = confirmed`; drafts never inflate fairness or same-day terms.
+- **Slice-scoped writes:** everything happens inside one `(work_date, time_slot)` — see [`persistence_database.md`](persistence_database.md) §0.
+- **Deterministic row order:** `slot_index` (0..n−1) assigned from a stable sort on `(task_name, technician_id)` at write time.
+- **Safe confirms:** unknown `tech_id`s (e.g. unmapped schedule names) are blocked at draft and confirm with an error listing missing ids.
+- **Resilient UI:** if a draft for the selected slice exists, it reloads into session state on open/refresh.
+
+---
+
+## 2. System diagram
 
 ```mermaid
 flowchart TB
@@ -59,7 +62,7 @@ Greedy output uses **`TechScoringProfile.tech_id`**; compatibility history match
 
 ---
 
-## 4. Database layer
+## 4. Database layer responsibilities
 
 | Responsibility | Location |
 |----------------|----------|
@@ -75,15 +78,13 @@ Greedy output uses **`TechScoringProfile.tech_id`**; compatibility history match
 | **Confirmed history** for scoring window | `scheduling_repository.load_confirmed_assignments_for_scoring` |
 | ORM ↔ domain | `db/adapters.py` |
 
-Public re-exports live in `db/__init__.py`.
-
-**Migrations:** Initial schema plus `slot_index` NOT NULL (backfill `0` then alter). Run `uv run alembic upgrade head`.
+Public re-exports live in `db/__init__.py`. Migrations run via `uv run alembic upgrade head`.
 
 ---
 
-## 5. Streamlit UI
+## 5. Streamlit UI layout
 
-The entrypoint [`app.py`](../app.py) only calls `configure_page()` and `render_app()`. Layout lives under **`src/auto_assign/ui/`**:
+`app.py` only calls `configure_page()` and `render_app()`. Layout lives under `src/auto_assign/ui/`.
 
 | Module | Purpose |
 |--------|---------|
@@ -93,17 +94,7 @@ The entrypoint [`app.py`](../app.py) only calls `configure_page()` and `render_a
 | `ui/schedule/` (`workflow.py`, `outcome_banner.py`, …) | Schedule upload, date/slot, task counts, **manual overrides**, scoring options, generate, DB draft sync, draft table, FK validation, confirm + overwrite warning |
 | `ui/__init__.py` | Composes `render_app()` |
 
-### User flow (with database configured)
-
-1. Import **technician profiles** so every schedule name you care about maps to a real **`tech_id`** row.
-2. Upload **schedule**, pick **date** and **time slot**, set **task headcounts** (must sum to pool size).
-3. Optional **Scoring options:** greedy random seed; **unlimited** confirmed history vs **fairness lookback (days)** for `load_confirmed_assignments_for_scoring` / `assign_tasks`.
-4. Optional **Manual Overrides:** apply day-wide call-off edits, shift-specific overtime edits, and pre-assign technicians to tasks before greedy.
-5. **Generate assignments** — manual picks are fixed first; greedy runs on the residual pool/capacity. Missing `tech_id` checks still block draft writes.
-6. On each run, DB **draft assignments + draft overrides** reload for the selected context.
-7. **Confirm schedule** — if valid, `confirm_slice` runs and related draft overrides are promoted to confirmed audit rows.
-
-Without a database URL, generate still runs in memory and stores the result in session state only; confirm/draft persistence are not available.
+For the user-facing step order (import profiles → schedule → generate → confirm), see [`operator_runbook.md`](operator_runbook.md) §5.
 
 ---
 
@@ -119,18 +110,6 @@ Without a database URL, generate still runs in memory and stores the result in s
 ## 7. Known limitations and follow-ups
 
 - **Assignment task FK:** `assignments.task_id` still stores task label text for compatibility. A future migration can align this to strict catalog FK semantics.
-- **Optional schedule `tech_id` column:** Recommended in design discussions but **not** in the CSV parser yet; names remain the schedule’s primary handle.
+- **Optional schedule `tech_id` column:** Recommended in design discussions but not in the CSV parser yet; names remain the schedule’s primary handle.
 - **Concurrency:** Last-write-wins on confirm; no optimistic locking.
-- **Streamlit:** Requires the `auto_assign` package importable (e.g. `uv sync` / editable install and `uv run streamlit run app.py` from repo root).
-
----
-
-## 8. Quick reference commands
-
-```bash
-uv sync
-uv run alembic upgrade head
-uv run streamlit run app.py
-```
-
-See [`persistence_database.md`](persistence_database.md) §7 for the full operator checklist and URL notes.
+- **Streamlit packaging:** Requires the `auto_assign` package importable (e.g. `uv sync` / editable install and `uv run streamlit run app.py` from repo root).

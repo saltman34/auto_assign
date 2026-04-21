@@ -1,6 +1,6 @@
 # Repository context (maintainer / agent map)
 
-Living index of what lives where. **Last full pass:** 2026-04-09.
+Living index of what lives where. **Last full pass:** 2026-04-11.
 
 ---
 
@@ -66,8 +66,8 @@ Streamlit app **Auto Assign**: upload a **schedule CSV**, choose **date** + **sh
 |--------|------|
 | `session.py` | `.env` load, `get_database_url`, engine, `session_scope`, `reset_engine_cache` (tests). |
 | `base.py` | SQLAlchemy `Base`. |
-| `models/technician.py` | `technicians`: PK `tech_id`, unique `tech_name`, JSON favorites/dislikes, `daily_preference`. |
-| `models/assignment_record.py` | `assignments`: FK `technician_id`, `task_id` (stores task **name** string today), `work_date`, `time_slot`, `status` draft/confirmed, `slot_index`. |
+| `models/technician.py` | `technicians`: PK `tech_id`, unique `tech_name`, JSON favorites/dislikes, JSON `eligible_by_task_id` / `proficiency_by_task_id` (catalog `task_id` keys), `daily_preference`. |
+| `models/assignment_record.py` | `assignments`: FK `technician_id`, `task_id` (normalized display label), optional `catalog_task_id` (task PK for scoring), `work_date`, `time_slot`, `status` draft/confirmed, `slot_index`. |
 | `models/task_catalog.py` | `tasks`: `task_id`, `task_name`, `default_count`. |
 | `models/assignment_override.py` | `assignment_overrides`: audit for call-off, overtime, manual_assignment; scope day vs slice. |
 | `assignment_repository.py` | `replace_draft_slice`, `confirm_slice`, `delete_draft_slice`, load helpers, `technician_ids_missing_from_db`. |
@@ -85,8 +85,8 @@ Streamlit app **Auto Assign**: upload a **schedule CSV**, choose **date** + **sh
 |--------|------|
 | `assignment_service.py` | `assign_tasks`: legacy shuffle vs greedy (`use_greedy_assignment`). |
 | `greedy_assigner.py` | Slot ordering, greedy fill, hooks to exact match / local swap. |
-| `compatibility_scoring.py` | Weighted score vs context + profile. |
-| `scoring_types.py` | `GreedyOptimizationConfig`, `AssignmentScoringContext`, profiles. |
+| `compatibility_scoring.py` | Weighted score vs context + profile; eligibility hard gate (`-inf` if ineligible); `NoEligibleTechnicianError` from greedy when a slot has no eligible tech. |
+| `scoring_types.py` | `GreedyOptimizationConfig`, `AssignmentScoringContext`, `TaskSlotRef`, `TechScoringProfile`, `ScoringWeights` (incl. proficiency bonuses). |
 | `scoring_weights_config.py` | `DEFAULT_SCORING_WEIGHTS`. |
 | `manual_overrides.py` | Apply day overrides; residual pool + task requests after manual rows. |
 | `greedy_exact_match.py`, `greedy_local_swap.py` | Optimization passes. |
@@ -132,7 +132,7 @@ Streamlit app **Auto Assign**: upload a **schedule CSV**, choose **date** + **sh
 
 ## `scripts/`
 
-- `run_greedy_simulation.py`: CLI benchmark; prepends `src` to path; `--mode paired|sanity`.
+- `run_greedy_simulation.py`: CLI benchmark (synthetic scenarios); prepends `src` to path; `--mode paired|sanity`. Purpose: root README → *Greedy scoring benchmarks (offline CLI)*.
 
 ---
 
@@ -149,18 +149,20 @@ Streamlit app **Auto Assign**: upload a **schedule CSV**, choose **date** + **sh
 |------|--------|
 | `assignment_algorithm.md` | Greedy design, draft vs confirmed semantics. |
 | `persistence_database.md` | Schema, indexes, overrides. |
-| `assignment_persistence_feature_summary.md` | E2E implementation narrative. |
+| `architecture_overview.md` | End-to-end implementation narrative (algorithm + schema + UI). |
 | `technician_profiles_ingestion.md` | CSV vs form, uniqueness. |
-| `greedy_scoring_policy_and_simulation.md` | Default policy + running simulations. |
-| `greedy_scoring_paired_benchmark_report.md` | Benchmark table. |
-| `operator_runbook.md` | **Operator quick path + troubleshooting** (added with README refresh). |
-| `csv_contract.md` | **Authoritative column / enum reference** for CSVs (added with README refresh). |
-| `examples/sample_task_list.yaml` | Illustrative task list only; app uses DB **Task Catalog**. |
+| `greedy_scoring_policy_and_simulation.md` | Living guide: defaults, fairness lookback, CLI. |
+| `greedy_scoring_paired_benchmark_report.md` | Frozen `paired` run table; refresh when weights/policy change. |
+| `operator_runbook.md` | Operator quick path + troubleshooting. |
+| `csv_contract.md` | Reference: CSV columns / enums / export shapes. |
+| `seed_demo_data.md` | One-click demo seeder design: 18 techs, 6 tasks, 14 days of confirmed history, regenerable CSV fixtures. |
+
+> Note: `assignment_persistence_feature_summary.md` was renamed to `architecture_overview.md` in the 2026-04 doc refresh.
 
 ---
 
 ## Gaps / follow-ups
 
 - `alembic/env.py` imports only `AssignmentRecord`, `Technician` for metadata; other models are pulled via relationships — OK if `Base.metadata` registers all linked tables; verify when adding **new** unreferenced tables.
-- `config.yaml` at repo root **removed**; replaced by `docs/examples/sample_task_list.yaml`.
+- `config.yaml` at repo root **removed**; the YAML task-list illustration that once lived at `docs/examples/sample_task_list.yaml` was deleted in the 2026-04 doc refresh. Task catalog shape is documented in `persistence_database.md` instead.
 - Streamlit **About** page does not link to markdown files on disk (in-app copy only); README and runbook point to `docs/`.

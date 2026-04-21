@@ -1,8 +1,6 @@
 # Technician profiles: desired features and system integration
 
-For **CSV column names and validation rules**, see [csv_contract.md](csv_contract.md) §2.
-
-This document describes the **two ways operators add technicians to the database**, how they map into the existing codebase, and how **“each tech only once”** is enforced today versus optional product hardening.
+How a technician profile enters the system — whether via bulk CSV upload or the in-app form — how each incoming row is turned into the `Tech` object the rest of the app uses, and how duplicate profiles are prevented across both paths so every technician appears exactly once.
 
 ---
 
@@ -53,7 +51,7 @@ Streamlit (technicians_panel.py)
 
 ### CSV contract
 
-Documented in [`parse_tech_profiles.py`](../src/auto_assign/core/csv_parsing/parse_tech_profiles.py): required columns `tech_id`, `tech_name`, `daily_preference`; optional `favorites` / `dislikes` (semicolon- or comma-separated task names). **Favorites/dislikes** are validated by [`validate_tech_preference_lists`](../src/auto_assign/core/task_management/validate_tech_preferences.py): names must match task names loaded from the DB-backed catalog (`tasks` table), no duplicate within a list, no task in both lists, at most three per list. Sample: [`data/sample_tech_profiles.csv`](../data/sample_tech_profiles.csv).
+Column names, types, and validation rules live in [`csv_contract.md`](csv_contract.md) §2. Favorites/dislikes are validated by [`validate_tech_preference_lists`](../src/auto_assign/core/task_management/validate_tech_preferences.py) against the DB-backed `tasks` catalog (no duplicates in a list, no overlap between favorites and dislikes, at most three each). Sample: [`data/sample_tech_profiles.csv`](../data/sample_tech_profiles.csv).
 
 ### Duplicate semantics (CSV)
 
@@ -124,7 +122,7 @@ All of this stays **behind** the existing boundaries: parsing in **`core/csv_par
 | Upsert / merge | [`src/auto_assign/db/tech_repository.py`](../src/auto_assign/db/tech_repository.py) |
 | ORM + constraints | [`src/auto_assign/db/models/technician.py`](../src/auto_assign/db/models/technician.py) |
 | Load for assignment scoring | [`src/auto_assign/db/scheduling_repository.py`](../src/auto_assign/db/scheduling_repository.py) (`load_tech_profiles_by_name`) |
-| Broader persistence story | [`docs/persistence_database.md`](persistence_database.md), [`docs/assignment_persistence_feature_summary.md`](assignment_persistence_feature_summary.md) |
+| Broader persistence story | [`docs/persistence_database.md`](persistence_database.md), [`docs/architecture_overview.md`](architecture_overview.md) |
 
 ---
 

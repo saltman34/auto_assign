@@ -1,6 +1,6 @@
 # Operator runbook
 
-Short path from empty install to a **published** shift slice, plus common failures. Deep design: [assignment_algorithm.md](assignment_algorithm.md), [persistence_database.md](persistence_database.md).
+Step-by-step path from a fresh clone to publishing your first shift assignment — install dependencies, point at a database, import technicians, generate a draft, and confirm it — plus the errors you're most likely to hit along the way and how to fix them.
 
 ---
 
@@ -49,8 +49,12 @@ Sidebar shows **Database ready** when URL resolution succeeds; otherwise configu
 
 ## 5. First-time data order
 
+**Fast path (recommended for demos and first-time exploration):** On the Home page, click **Load demo data** in the blue-accented card at the top. That populates the task catalog, 18 technicians with full eligibility and proficiency, and 14 days of confirmed assignment history, then offers a 7-day schedule CSV for download. Upload that CSV below, pick any date in the window, and you have a working draft in under a minute. See [seed_demo_data.md](seed_demo_data.md) for what exactly gets written.
+
+**Manual path (real setup or exercising the import flow):**
+
 1. **Task Catalog** — Add every task name you will use in headcounts and in technician favorites/dislikes. Names are normalized when validated; stay consistent with [csv_contract.md](csv_contract.md).
-2. **Technician Profiles** — Import CSV or use the form. Each schedule **`tech_name`** must match exactly one saved profile (after normalization, title case for schedule CSV).
+2. **Technician Profiles** — Import CSV or use the form. Each schedule **`tech_name`** must match exactly one saved profile (after normalization, title case for schedule CSV). On **Add or Edit Profile**, set **per-task eligibility** (hard gate) and **proficiency** (optional score bonus); rubric: [proficiency_rubric.md](proficiency_rubric.md). Leaving defaults means everyone eligible and proficiency “independent” (no bonus).
 3. **Home → Assignment Engine** — Upload schedule CSV, complete steps in order, **Generate draft**, then **Publish**.
 
 **Schedule CSV** requirements: [csv_contract.md](csv_contract.md) §1.
@@ -78,6 +82,8 @@ Sidebar shows **Database ready** when URL resolution succeeds; otherwise configu
 | “number of task requests … not equal to the number of available techs” | Headcounts must sum to the **pool size** for that date/slot (after call-offs and availability flags). Adjust counts or overrides. |
 | “Cannot save draft: … tech_id … not in the database” | Every assigned id must exist in `technicians`. Import profiles so **schedule names** map to real `tech_id`s (unmapped names get synthetic ids that are not FK-safe). |
 | “Cannot confirm … Missing: … tech_id” | Same as above — fix technician records before **Publish**. |
+| “No **eligible** technician for task …” | For that catalog task, every pool member is marked **ineligible** (or the slot is otherwise impossible). On Technician Profiles, turn eligibility back on for at least one person in the pool, or change headcounts / manual assignments so the task is not required. Alternatively, Step 6 lets an operator **override eligibility** for a specific manual placement (see below). |
+| “… is not certified for …” warning in Step 6 | You selected a technician the catalog flags as ineligible for that task. If this is a training / shadowing placement, click **Override eligibility and add** to confirm; the override is persisted for audit and the draft continues. Click **Cancel** to back out and pick a different pair. |
 | Call-off ignored? | `staffing_status` must be `call_off` for that person’s **row on that date**; call-offs exclude from pool for **all** slots that day in code. |
 
 ---

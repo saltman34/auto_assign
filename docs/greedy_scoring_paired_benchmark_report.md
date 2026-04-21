@@ -1,5 +1,7 @@
 # Greedy Scoring Paired Benchmark Report
 
+Frozen snapshot of one `python scripts/run_greedy_simulation.py --mode paired` run (baseline vs improved on the same seeded scenarios). Regenerate this file when scoring weights, optimization flags, or scenario generation change, or the numbers will drift.
+
 Date: 2026-04-09
 
 ## Scope
