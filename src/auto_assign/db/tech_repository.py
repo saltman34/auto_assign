@@ -83,6 +83,8 @@ def merge_technician_from_tech(session: Session, tech: Tech) -> Technician:
     existing.daily_preference = tech.daily_preference
     existing.favorites = list(tech.favorites)
     existing.dislikes = list(tech.dislikes)
+    existing.eligible_by_task_id = dict(tech.eligible_by_task_id)
+    existing.proficiency_by_task_id = {k: v.value for k, v in tech.proficiency_by_task_id.items()}
     return existing
 
 

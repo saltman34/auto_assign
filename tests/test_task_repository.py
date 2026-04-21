@@ -81,6 +81,21 @@ def test_delete_task_blocked_when_used_by_assignments(engine) -> None:
             delete_task(session, task_id)
 
 
+def test_list_tasks_orders_alphabetically(engine) -> None:
+    '''Tasks sort alphabetically by task_name for deterministic display.'''
+    with Session(engine) as session:
+        create_task(session, 'Recuts', default_count=1)
+        create_task(session, 'Clinicals', default_count=2)
+        create_task(session, 'Embedding', default_count=2)
+        create_task(session, 'Grossing', default_count=1)
+        session.commit()
+
+    with Session(engine) as session:
+        out = list_tasks(session)
+    names = [t.task_name for t in out]
+    assert names == ['Clinicals', 'Embedding', 'Grossing', 'Recuts']
+
+
 def test_delete_task_blocked_when_used_by_tech_preferences(engine) -> None:
     with Session(engine) as session:
         row = create_task(session, 'Embedding', default_count=0)

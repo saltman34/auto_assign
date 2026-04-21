@@ -10,7 +10,7 @@ class Task:
     task_name: str
     default_count: int = 0
 
-    
+
     def __post_init__(self):
         '''
         Validate the task.

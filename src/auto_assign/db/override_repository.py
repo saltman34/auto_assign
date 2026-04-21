@@ -111,6 +111,7 @@ def replace_draft_manual_assignments_for_slice(
                 technician_id=a.technician_id,
                 task_name=a.task_name,
                 status=AssignmentStatus.DRAFT,
+                eligibility_overridden=bool(a.eligibility_overridden),
             )
         )
 
@@ -164,6 +165,7 @@ def load_draft_overrides_for_slice(
                     technician_id=row.technician_id,
                     date_assigned=work_date,
                     time_slot=time_slot,
+                    eligibility_overridden=bool(row.eligibility_overridden),
                 )
             )
     return {
@@ -259,6 +261,7 @@ def load_confirmed_override_rows_for_slice(
                 'tech_id': row.technician_id,
                 'task': row.task_name or '',
                 'confirmed_at': row.confirmed_at.isoformat() if row.confirmed_at else '',
+                'eligibility_overridden': bool(row.eligibility_overridden),
             }
         )
     return out

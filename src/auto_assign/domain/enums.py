@@ -51,3 +51,16 @@ class OverrideKind(Enum):
     OVERTIME = 'overtime'
     MANUAL_ASSIGNMENT = 'manual_assignment'
 
+
+class TaskProficiencyLevel(Enum):
+    '''
+    Per-(technician, catalog task) skill level for scoring (combined speed + quality).
+
+    Stored on technicians keyed by catalog ``task_id``; see ``docs/proficiency_rubric.md``.
+    '''
+
+    NOVICE = 'novice'
+    INDEPENDENT = 'independent'
+    STRONG = 'strong'
+    EXPERT = 'expert'
+

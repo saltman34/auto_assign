@@ -15,6 +15,7 @@ from collections.abc import Iterable
 from auto_assign.db.models.assignment_record import AssignmentRecord
 from auto_assign.db.models.technician import Technician
 from auto_assign.domain.entities import Assignment, Tech
+from auto_assign.domain.entities.tech import proficiency_dict_from_storage
 from auto_assign.domain.enums import AssignmentStatus
 
 
@@ -33,12 +34,24 @@ def tech_from_technician(row: Technician) -> Tech:
         ``dislikes`` are **copies** so mutating the domain lists does not alter ``row``.
     '''
     # list(...) decouples domain from ORM in-memory state if the session mutates later.
+    elig: dict[str, bool] = {}
+    for k, v in (row.eligible_by_task_id or {}).items():
+        ks = str(k).strip()
+        if ks:
+            elig[ks] = bool(v)
+    prof_raw: dict[str, object] = {}
+    for k, v in (row.proficiency_by_task_id or {}).items():
+        ks = str(k).strip()
+        if ks and v is not None:
+            prof_raw[ks] = v
     return Tech(
         tech_id=row.tech_id,
         tech_name=row.tech_name,
         daily_preference=row.daily_preference,
         favorites=list(row.favorites),
         dislikes=list(row.dislikes),
+        eligible_by_task_id=elig,
+        proficiency_by_task_id=proficiency_dict_from_storage(prof_raw),
     )
 
 
@@ -63,6 +76,8 @@ def assignment_from_record(row: AssignmentRecord) -> Assignment:
         technician_id=row.technician_id,
         date_assigned=row.work_date,
         time_slot=row.time_slot,
+        catalog_task_id=row.catalog_task_id,
+        eligibility_overridden=bool(getattr(row, 'eligibility_overridden', False)),
     )
 
 
@@ -87,6 +102,8 @@ def technician_from_tech(tech: Tech) -> Technician:
         daily_preference=tech.daily_preference,
         favorites=list(tech.favorites),
         dislikes=list(tech.dislikes),
+        eligible_by_task_id=dict(tech.eligible_by_task_id),
+        proficiency_by_task_id={k: v.value for k, v in tech.proficiency_by_task_id.items()},
     )
 
 

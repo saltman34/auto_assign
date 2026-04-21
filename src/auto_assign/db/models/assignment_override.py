@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Date, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, func
+from sqlalchemy import Boolean, Date, DateTime, Enum as SQLEnum, ForeignKey, Index, Integer, String, false, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from auto_assign.db.base import Base
@@ -66,3 +66,8 @@ class AssignmentOverride(Base):
     )
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, server_default=func.now())
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    #: True when a MANUAL_ASSIGNMENT override places a tech the catalog explicitly flags
+    #: as ineligible (training/shadowing case). Always False for CALL_OFF / OVERTIME.
+    eligibility_overridden: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=false()
+    )

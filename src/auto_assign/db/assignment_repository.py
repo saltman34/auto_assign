@@ -31,10 +31,12 @@ def _records_for_slice(
             AssignmentRecord(
                 technician_id=a.technician_id,
                 task_id=a.task_name,
+                catalog_task_id=a.catalog_task_id,
                 work_date=a.date_assigned,
                 time_slot=a.time_slot,
                 status=status,
                 slot_index=slot_index,
+                eligibility_overridden=bool(a.eligibility_overridden),
             )
         )
     return rows

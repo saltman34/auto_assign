@@ -19,6 +19,8 @@ from auto_assign.domain.enums import DailyPreference
 
 # JSON array of strings; JSONB on PostgreSQL, portable JSON elsewhere (e.g. SQLite tests).
 _json_str_list = JSON().with_variant(JSONB(), 'postgresql')
+# JSON object maps (task_id -> value); JSONB on PostgreSQL.
+_json_obj = JSON().with_variant(JSONB(), 'postgresql')
 
 
 class Technician(Base):
@@ -42,5 +44,17 @@ class Technician(Base):
     favorites: Mapped[list[str]] = mapped_column(_json_str_list, nullable=False, default=list)
     #: Normalized task names (same convention as domain ``Tech.dislikes``).
     dislikes: Mapped[list[str]] = mapped_column(_json_str_list, nullable=False, default=list)
+    #: Catalog ``task_id`` -> explicit False to hard-exclude (absent keys = eligible).
+    eligible_by_task_id: Mapped[dict[str, bool]] = mapped_column(
+        _json_obj,
+        nullable=False,
+        server_default='{}',
+    )
+    #: Catalog ``task_id`` -> ``TaskProficiencyLevel`` value string (e.g. ``expert``).
+    proficiency_by_task_id: Mapped[dict[str, str]] = mapped_column(
+        _json_obj,
+        nullable=False,
+        server_default='{}',
+    )
 
     assignments: Mapped[list['AssignmentRecord']] = relationship(back_populates='technician')
